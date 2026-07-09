@@ -1,0 +1,24 @@
+name: firestore_client
+description: >-
+  A pure-Dart Firebase Auth and Cloud Firestore client over the public REST
+  APIs, for platforms FlutterFire does not cover (notably Linux desktop) and
+  for plain Dart programs.
+version: 0.1.0
+repository: https://github.com/project516/firestore_client
+
+topics:
+  - firebase
+  - firestore
+  - rest
+  - authentication
+
+environment:
+  sdk: ^3.4.0
+
+dependencies:
+  crypto: ^3.0.6
+  http: ^1.2.0
+
+dev_dependencies:
+  lints: ^5.0.0
+  test: ^1.25.0
