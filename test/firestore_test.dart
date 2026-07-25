@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 
 import 'package:http/http.dart' as http;
@@ -213,6 +214,107 @@ void main() {
         return http.Response('missing', 404);
       });
       await _firestore(client, token: null).getDocument('users/alice');
+    });
+    test(
+        'pollCollection emits the initial snapshot then suppresses unchanged '
+        'snapshots', () async {
+      var call = 0;
+      final client = MockClient((_) async {
+        call++;
+        // The document is identical on every poll, so the fingerprint never
+        // changes; only the first snapshot should be emitted, no matter how
+        // many polls follow.
+        return http.Response(
+          jsonEncode({
+            'documents': [
+              {
+                'name': 'projects/demo/databases/(default)/documents/users/a',
+                'fields': {'n': FirestoreValueCodec.encode(1)},
+                'createTime': '2026-07-08T10:00:00Z',
+                'updateTime': '2026-07-08T11:00:00Z',
+              },
+            ],
+          }),
+          200,
+        );
+      });
+      final stream = _firestore(client).pollCollection(
+        'users',
+        interval: const Duration(milliseconds: 50),
+      );
+      final emissions = <List<Document>>[];
+      final sub = stream.listen(emissions.add);
+      // Long enough for several polls, each returning the same document.
+      await Future<void>.delayed(const Duration(milliseconds: 270));
+      await sub.cancel();
+      expect(emissions.length, 1);
+      expect(call, greaterThanOrEqualTo(3));
+      expect(emissions.single.single.fields['n'], 1);
+    });
+
+    test('pollCollection re-emits when a document changes', () async {
+      var call = 0;
+      final client = MockClient((_) async {
+        call++;
+        // The document's updateTime advances on every poll, so the fingerprint
+        // changes and pollCollection re-emits each time.
+        return http.Response(
+          jsonEncode({
+            'documents': [
+              {
+                'name': 'projects/demo/databases/(default)/documents/users/a',
+                'fields': {'n': FirestoreValueCodec.encode(call)},
+                'createTime': '2026-07-08T10:00:00Z',
+                'updateTime': '2026-07-08T11:00:0${call}Z',
+              },
+            ],
+          }),
+          200,
+        );
+      });
+      final stream = _firestore(client).pollCollection(
+        'users',
+        interval: const Duration(milliseconds: 50),
+      );
+      final emissions = <List<Document>>[];
+      final sub = stream.listen(emissions.add);
+      await Future<void>.delayed(const Duration(milliseconds: 270));
+      await sub.cancel();
+      expect(emissions.length, greaterThanOrEqualTo(2));
+      expect(emissions.first.single.fields['n'], 1);
+      final counts = emissions.map((e) => e.single.fields['n'] as int).toList();
+      for (var i = 1; i < counts.length; i++) {
+        expect(counts[i], greaterThan(counts[i - 1]));
+      }
+    });
+
+    test('pollCollection stops polling after the subscription is cancelled',
+        () async {
+      var call = 0;
+      final client = MockClient((_) async {
+        call++;
+        return http.Response(
+          jsonEncode({
+            'documents': [
+              _docJson('users/a', {'n': call})
+            ]
+          }),
+          200,
+        );
+      });
+      final stream = _firestore(client).pollCollection(
+        'users',
+        interval: const Duration(milliseconds: 50),
+      );
+      final sub = stream.listen((_) {});
+      // Let the first poll land, then cancel while it is waiting for the next.
+      await Future<void>.delayed(const Duration(milliseconds: 80));
+      final callsBeforeCancel = call;
+      await sub.cancel();
+      // Plenty of time for two more poll intervals to have fired if the loop
+      // ignored cancellation.
+      await Future<void>.delayed(const Duration(milliseconds: 200));
+      expect(call, callsBeforeCancel);
     });
   });
 }

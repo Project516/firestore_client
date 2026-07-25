@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+- `Firestore.pollCollection`: cancelling the subscription now stops the polling
+  loop promptly, even while it is waiting between polls; the pending delay
+  resolves early instead of letting the loop run a final poll afterward.
+
 ## 0.1.0
 
 - Initial release: `FirebaseAuthSession` (Identity Toolkit sign-in +

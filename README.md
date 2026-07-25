@@ -26,7 +26,8 @@ small, dependency-light client:
 - **`Firestore`** -- Cloud Firestore over the v1 REST API: document get,
   create, set (with `updateMask` merge semantics), delete, paginated
   collection listing, structured queries (`runQuery` with typed filters), and
-  a polling change stream for platforms without the gRPC `Listen` API.
+  a polling change stream for platforms without the gRPC `Listen` API
+  (cancelling its subscription stops the loop promptly).
 - **`FirestoreValueCodec`** -- lossless conversion between plain Dart values
   and Firestore's REST `Value` JSON (null, bool, int, double, String,
   DateTime, bytes, GeoPoint, document references, lists, maps).

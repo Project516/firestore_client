@@ -339,18 +339,45 @@ class Firestore {
   /// Polls [collectionPath] every [interval] and emits the full document list
   /// whenever any document's `updateTime` (or the document count) changes.
   ///
-  /// Firestore's realtime `Listen` API is gRPC-only; polling is the honest
-  /// REST equivalent and is adequate for team-tool sync loops. The first
-  /// emission happens immediately on listen.
+  /// Firestore's realtime `Listen` API is gRPC-only; polling is the honest REST
+  /// equivalent and is adequate for team-tool sync loops. The first emission
+  /// happens immediately on listen.
+  ///
+  /// Cancelling the subscription stops the loop promptly, even while it is
+  /// waiting for [interval] between polls: the pending wait resolves early
+  /// instead of letting the loop run a final poll after cancellation.
   Stream<List<Document>> pollCollection(
     String collectionPath, {
     Duration interval = const Duration(seconds: 30),
-  }) async* {
+  }) {
     String fingerprint(List<Document> docs) => docs
         .map((d) => '${d.name}@${d.updateTime?.microsecondsSinceEpoch}')
         .join('|');
+    // Completes as soon as the listener cancels, so the delay between polls
+    // can return early instead of outliving the subscription. Using a
+    // StreamController lets us observe cancellation independently of the
+    // polling loop, which runs as a plain async function feeding the sink.
+    final cancellation = Completer<void>();
+    late final StreamController<List<Document>> controller;
+    controller = StreamController<List<Document>>(
+      onListen: () => _poll(
+          collectionPath, interval, fingerprint, controller.sink, cancellation),
+      onCancel: () {
+        if (!cancellation.isCompleted) cancellation.complete();
+      },
+    );
+    return controller.stream;
+  }
+
+  Future<void> _poll(
+    String collectionPath,
+    Duration interval,
+    String Function(List<Document>) fingerprint,
+    StreamSink<List<Document>> sink,
+    Completer<void> cancellation,
+  ) async {
     String? last;
-    while (true) {
+    while (!cancellation.isCompleted) {
       List<Document>? docs;
       try {
         docs = await listDocuments(collectionPath);
@@ -361,11 +388,16 @@ class Firestore {
         final current = fingerprint(docs);
         if (current != last) {
           last = current;
-          yield docs;
+          if (!cancellation.isCompleted) sink.add(docs);
         }
       }
-      await Future<void>.delayed(interval);
+      if (cancellation.isCompleted) break;
+      await Future.any([
+        Future<void>.delayed(interval),
+        cancellation.future,
+      ]);
     }
+    await sink.close();
   }
 
   void close() {
