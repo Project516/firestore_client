@@ -406,5 +406,143 @@ void main() {
       expect(await cache.read('one'), isNull);
       expect(await cache.read('two'), isNull);
     });
+
+    test('a key longer than a filename survives a round trip', () async {
+      final cache = FileFirestoreCache(dir);
+      // The shape of a runQuery key: the whole encoded query body. Encoding that
+      // into the filename produced a name past the 255-byte limit, so the write
+      // failed and the cache silently never worked for queries.
+      final key = 'firestore_client/v1/demo/(default)/query/'
+          '${'{"structuredQuery":{"from":[{"collectionId":"teams"}]}}' * 12}';
+      expect(key.length, greaterThan(400));
+
+      await cache.write(key, 'payload');
+
+      expect(await cache.read(key), 'payload');
+    });
+
+    test('two concurrent writes for one key do not interleave', () async {
+      final cache = FileFirestoreCache(dir);
+      // A shared temp path let both writers put bytes in one file, and the
+      // rename then published something that decoded to neither value.
+      final first = 'a' * 4000;
+      final second = 'b' * 4000;
+
+      await Future.wait<void>([
+        cache.write('same-key', first),
+        cache.write('same-key', second),
+      ]);
+
+      // Whichever landed last wins; what must never happen is a blend of the
+      // two.
+      expect(await cache.read('same-key'), anyOf(first, second));
+    });
+
+    test('clear leaves files the cache did not write', () async {
+      // clearCache() runs on sign-out, and a host may point the cache at a
+      // directory that already holds its own state, including the persisted
+      // session.
+      final cache = FileFirestoreCache(dir);
+      await cache.write('mine', 'payload');
+      final foreign = File('${dir.path}/session.json')
+        ..writeAsStringSync('{"refreshToken":"keep me"}');
+
+      await cache.clear();
+
+      expect(await cache.read('mine'), isNull);
+      expect(foreign.existsSync(), isTrue);
+      expect(foreign.readAsStringSync(), '{"refreshToken":"keep me"}');
+      // The directory itself survives, so a held handle stays valid.
+      expect(dir.existsSync(), isTrue);
+    });
   });
+
+  group('cache write failures', () {
+    test('a cache that throws on write does not poison a good read', () async {
+      // FirestoreCache is public, so a host implementation can throw. With the
+      // write inside the request's try block, that threw into the catch, which
+      // then served an older cached payload instead of the one the server had
+      // just returned.
+      final cache = _ThrowingWriteCache()
+        ..entries['firestore_client/v1/demo/(default)/doc/users/alice'] =
+            jsonEncode(_docJson('users/alice', {'name': 'Stale'}));
+      final client = _SwitchableClient(
+        (request) async => http.Response(
+          jsonEncode(_docJson('users/alice', {'name': 'Fresh'})),
+          200,
+        ),
+      );
+      final firestore = Firestore(
+        projectId: 'demo',
+        idTokenProvider: () async => 'tok',
+        httpClient: client,
+        cache: cache,
+      );
+
+      final read = await firestore.getDocument('users/alice');
+
+      expect(read!.fields['name'], 'Fresh');
+      expect(read.fromCache, isFalse);
+    });
+
+    test('a 404 never stores the empty stand-in', () async {
+      // The closure returns '' for a 404. Writing that, even for the moment
+      // before it is removed, let a concurrent read fall back to '' and throw
+      // FormatException out of jsonDecode.
+      final cache = _RecordingCache();
+      final client = _SwitchableClient(
+        (request) async => http.Response('{}', 404),
+      );
+      final firestore = Firestore(
+        projectId: 'demo',
+        idTokenProvider: () async => 'tok',
+        httpClient: client,
+        cache: cache,
+      );
+
+      expect(await firestore.getDocument('users/ghost'), isNull);
+
+      expect(cache.writes, isEmpty);
+    });
+  });
+}
+
+/// Throws from [write] but reads normally, standing in for a host cache whose
+/// storage is full or read-only.
+class _ThrowingWriteCache implements FirestoreCache {
+  final Map<String, String> entries = <String, String>{};
+
+  @override
+  Future<String?> read(String key) async => entries[key];
+
+  @override
+  Future<void> write(String key, String value) async =>
+      throw StateError('disk full');
+
+  @override
+  Future<void> remove(String key) async => entries.remove(key);
+
+  @override
+  Future<void> clear() async => entries.clear();
+}
+
+/// Records every write so a test can assert one never happened.
+class _RecordingCache implements FirestoreCache {
+  final Map<String, String> entries = <String, String>{};
+  final List<String> writes = <String>[];
+
+  @override
+  Future<String?> read(String key) async => entries[key];
+
+  @override
+  Future<void> write(String key, String value) async {
+    writes.add(key);
+    entries[key] = value;
+  }
+
+  @override
+  Future<void> remove(String key) async => entries.remove(key);
+
+  @override
+  Future<void> clear() async => entries.clear();
 }

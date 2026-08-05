@@ -166,24 +166,41 @@ class Firestore {
   /// Returns the payload and whether it came from the cache, so the caller can
   /// mark what it decodes as stale. A read with nothing cached rethrows the
   /// original failure: there is no better answer to give.
+  ///
+  /// [cacheable] is false for a response that must not be stored, such as the
+  /// empty body standing in for a 404.
   Future<({String payload, bool fromCache})> _cachedRead(
     String key,
-    Future<String> Function() request,
-  ) async {
+    Future<String> Function() request, {
+    bool Function(String payload)? cacheable,
+  }) async {
     final cache = _cache;
     if (cache == null) {
       return (payload: await request(), fromCache: false);
     }
+    final String payload;
     try {
-      final payload = await request();
-      await cache.write(key, payload);
-      return (payload: payload, fromCache: false);
+      payload = await request();
     } catch (error) {
       if (!_shouldServeFromCache(error)) rethrow;
       final cached = await cache.read(key);
       if (cached == null) rethrow;
       return (payload: cached, fromCache: true);
     }
+    // Outside the try above on purpose. A FirestoreCache is a public interface,
+    // so a host implementation may throw from write; with the write inside the
+    // try, that threw into the catch, which then discarded the payload the
+    // server had just returned and answered with an older cached one marked
+    // fromCache. A cache that cannot be written is a lost optimisation, never a
+    // reason to serve stale data over fresh.
+    if (cacheable?.call(payload) ?? true) {
+      try {
+        await cache.write(key, payload);
+      } catch (_) {
+        // Deliberately swallowed: see above.
+      }
+    }
+    return (payload: payload, fromCache: false);
   }
 
   String get _documentsUrl =>
@@ -227,18 +244,25 @@ class Firestore {
     // rather than going through _cachedRead. A 404 is a real answer; it is not
     // cache-eligible, and _shouldServeFromCache would not have served it anyway.
     var deleted = false;
-    final read = await _cachedRead(key, () async {
-      final response = await _http.get(
-        Uri.parse('$_documentsUrl/$path'),
-        headers: await _headers(),
-      );
-      if (response.statusCode == 404) {
-        deleted = true;
-        return '';
-      }
-      if (response.statusCode != 200) _throw(response);
-      return response.body;
-    });
+    final read = await _cachedRead(
+      key,
+      () async {
+        final response = await _http.get(
+          Uri.parse('$_documentsUrl/$path'),
+          headers: await _headers(),
+        );
+        if (response.statusCode == 404) {
+          deleted = true;
+          return '';
+        }
+        if (response.statusCode != 200) _throw(response);
+        return response.body;
+      },
+      // The 404 stand-in must not be written, even for the moment before the
+      // removal below: a concurrent read falling back inside that window would
+      // get '' and throw FormatException out of jsonDecode.
+      cacheable: (_) => !deleted,
+    );
     if (deleted) {
       await _cache?.remove(key);
       return null;

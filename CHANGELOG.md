@@ -15,7 +15,14 @@
   data would be wrong. A 429 or 5xx does fall back, as does any failure to reach
   the server at all. A 404 also drops the cached copy, so a deleted document
   cannot come back.
-- `Firestore.clearCache()`, for sign-out.
+- `Firestore.clearCache()`, for sign-out. `FileFirestoreCache.clear()` removes
+  only its own entries and leaves the directory in place, so a cache pointed at
+  a directory the host also uses cannot delete unrelated state.
+- `FileFirestoreCache` hashes keys into filenames, so a long key (a `runQuery`
+  key holds the whole encoded query) stays inside the filesystem's name limit,
+  and each write uses its own temporary file.
+- A cache that throws on write never downgrades a successful read: the payload
+  the server returned is still returned, uncached.
 
 ## 0.1.0
 

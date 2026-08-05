@@ -94,6 +94,10 @@ the session on the next launch with `session.restore(...)`.
   confidentiality.
 - `FirebaseAuthSession.toJson()` contains the refresh token. Store it in a
   private location.
+- `FileFirestoreCache` writes document payloads to disk as plaintext, and those
+  documents are whatever the signed-in user was allowed to read. Point it at a
+  private directory, and call `Firestore.clearCache()` on sign-out so the next
+  user cannot read the previous one's data.
 - All access control must live in your Firestore security rules, exactly as
   with the official SDKs.
 
