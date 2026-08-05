@@ -3,6 +3,7 @@ import 'dart:convert';
 
 import 'package:http/http.dart' as http;
 
+import 'cache.dart';
 import 'value_codec.dart';
 
 /// A Firestore document: its path, decoded fields, and server timestamps.
@@ -12,6 +13,7 @@ class Document {
     required this.fields,
     this.createTime,
     this.updateTime,
+    this.fromCache = false,
   });
 
   /// Full resource name, `projects/{p}/databases/{d}/documents/{path}`.
@@ -22,6 +24,21 @@ class Document {
 
   final DateTime? createTime;
   final DateTime? updateTime;
+
+  /// True when this document came from the offline cache rather than the
+  /// server, so it may be stale. Callers that show data to a person should say
+  /// so; callers that make decisions on it should treat it as a snapshot, not
+  /// as the current state.
+  final bool fromCache;
+
+  /// A copy of this document marked as having come from the cache.
+  Document asCached() => Document(
+        name: name,
+        fields: fields,
+        createTime: createTime,
+        updateTime: updateTime,
+        fromCache: true,
+      );
 
   /// The path below `/documents/`, e.g. `users/alice`.
   String get path {
@@ -101,13 +118,73 @@ class Firestore {
     required Future<String?> Function() idTokenProvider,
     this.databaseId = '(default)',
     http.Client? httpClient,
+    FirestoreCache? cache,
   })  : _idToken = idTokenProvider,
-        _http = httpClient ?? http.Client();
+        _http = httpClient ?? http.Client(),
+        _cache = cache;
 
   final String projectId;
   final String databaseId;
   final Future<String?> Function() _idToken;
   final http.Client _http;
+
+  /// Where successful reads are kept so they can be served again when the
+  /// server cannot be reached. Null disables caching entirely, which is the
+  /// default: a cache is a place on disk and only the host app knows where that
+  /// should be.
+  final FirestoreCache? _cache;
+
+  /// True when the client has somewhere to cache reads.
+  bool get isCaching => _cache != null;
+
+  /// Drops every cached read. Call it on sign-out: the cache holds documents
+  /// the previous user was allowed to see.
+  Future<void> clearCache() async => _cache?.clear();
+
+  /// Cache key for a read. Namespaced by project and database so two clients in
+  /// one process cannot answer each other's reads, and prefixed by the kind of
+  /// read so a document and a query over the same path stay separate.
+  String _cacheKey(String kind, String target) =>
+      'firestore_client/v1/$projectId/$databaseId/$kind/$target';
+
+  /// Whether [error] means the server was never reached, or reached and could
+  /// not answer, so a cached payload is the better response.
+  ///
+  /// Anything that is not a [FirestoreApiException] never got an answer at all
+  /// (socket, DNS, timeout, a client that was closed). A [FirestoreApiException]
+  /// did get one, so it is only cache-eligible when the server said it was
+  /// temporarily unable: 429 and 5xx. A 403 or 404 is a real answer and must not
+  /// be papered over with stale data.
+  bool _shouldServeFromCache(Object error) {
+    if (error is! FirestoreApiException) return true;
+    return error.statusCode == 429 || error.statusCode >= 500;
+  }
+
+  /// Runs [request], caching a success and falling back to the cached payload
+  /// when the server could not answer.
+  ///
+  /// Returns the payload and whether it came from the cache, so the caller can
+  /// mark what it decodes as stale. A read with nothing cached rethrows the
+  /// original failure: there is no better answer to give.
+  Future<({String payload, bool fromCache})> _cachedRead(
+    String key,
+    Future<String> Function() request,
+  ) async {
+    final cache = _cache;
+    if (cache == null) {
+      return (payload: await request(), fromCache: false);
+    }
+    try {
+      final payload = await request();
+      await cache.write(key, payload);
+      return (payload: payload, fromCache: false);
+    } catch (error) {
+      if (!_shouldServeFromCache(error)) rethrow;
+      final cached = await cache.read(key);
+      if (cached == null) rethrow;
+      return (payload: cached, fromCache: true);
+    }
+  }
 
   String get _documentsUrl =>
       'https://firestore.googleapis.com/v1/projects/$projectId'
@@ -139,14 +216,37 @@ class Firestore {
   }
 
   /// Fetches the document at [path] (e.g. `users/alice`); null on 404.
+  ///
+  /// With a cache configured, a successful read is stored, and a later read that
+  /// cannot reach the server is answered from it with [Document.fromCache] set.
+  /// A 404 drops any cached copy: the document is gone, and serving the old one
+  /// would resurrect it.
   Future<Document?> getDocument(String path) async {
-    final response = await _http.get(
-      Uri.parse('$_documentsUrl/$path'),
-      headers: await _headers(),
+    final key = _cacheKey('doc', path);
+    // A deleted document has no payload to cache or decode, so it short-circuits
+    // rather than going through _cachedRead. A 404 is a real answer; it is not
+    // cache-eligible, and _shouldServeFromCache would not have served it anyway.
+    var deleted = false;
+    final read = await _cachedRead(key, () async {
+      final response = await _http.get(
+        Uri.parse('$_documentsUrl/$path'),
+        headers: await _headers(),
+      );
+      if (response.statusCode == 404) {
+        deleted = true;
+        return '';
+      }
+      if (response.statusCode != 200) _throw(response);
+      return response.body;
+    });
+    if (deleted) {
+      await _cache?.remove(key);
+      return null;
+    }
+    final document = Document.fromJson(
+      jsonDecode(read.payload) as Map<String, dynamic>,
     );
-    if (response.statusCode == 404) return null;
-    if (response.statusCode != 200) _throw(response);
-    return Document.fromJson(jsonDecode(response.body) as Map<String, dynamic>);
+    return read.fromCache ? document.asCached() : document;
   }
 
   /// Creates a document in [collectionPath]. With [id] the write fails if the
@@ -266,28 +366,45 @@ class Firestore {
   }
 
   /// Lists every document in [collectionPath], following pagination.
+  ///
+  /// With a cache configured, the assembled list is cached as one payload, and a
+  /// list that cannot reach the server is served from it with every
+  /// [Document.fromCache] set. A partial fetch is never cached: if page three
+  /// fails, the cached list would silently lose everything after page two.
   Future<List<Document>> listDocuments(
     String collectionPath, {
     int pageSize = 300,
   }) async {
-    final results = <Document>[];
-    String? pageToken;
-    do {
-      final uri = Uri.parse('$_documentsUrl/$collectionPath').replace(
-        queryParameters: {
-          'pageSize': '$pageSize',
-          if (pageToken != null) 'pageToken': pageToken,
-        },
-      );
-      final response = await _http.get(uri, headers: await _headers());
-      if (response.statusCode != 200) _throw(response);
-      final json = jsonDecode(response.body) as Map<String, dynamic>;
-      for (final doc in (json['documents'] as List? ?? const [])) {
-        results.add(Document.fromJson((doc as Map).cast<String, dynamic>()));
-      }
-      pageToken = json['nextPageToken'] as String?;
-    } while (pageToken != null);
-    return results;
+    final read = await _cachedRead(_cacheKey('list', collectionPath), () async {
+      final documents = <Map<String, dynamic>>[];
+      String? pageToken;
+      do {
+        final uri = Uri.parse('$_documentsUrl/$collectionPath').replace(
+          queryParameters: {
+            'pageSize': '$pageSize',
+            if (pageToken != null) 'pageToken': pageToken,
+          },
+        );
+        final response = await _http.get(uri, headers: await _headers());
+        if (response.statusCode != 200) _throw(response);
+        final json = jsonDecode(response.body) as Map<String, dynamic>;
+        for (final doc in (json['documents'] as List? ?? const [])) {
+          documents.add((doc as Map).cast<String, dynamic>());
+        }
+        pageToken = json['nextPageToken'] as String?;
+      } while (pageToken != null);
+      return jsonEncode({'documents': documents});
+    });
+    final json = jsonDecode(read.payload) as Map<String, dynamic>;
+    return [
+      for (final doc in (json['documents'] as List? ?? const []))
+        _decode((doc as Map).cast<String, dynamic>(), read.fromCache),
+    ];
+  }
+
+  static Document _decode(Map<String, dynamic> json, bool fromCache) {
+    final document = Document.fromJson(json);
+    return fromCache ? document.asCached() : document;
   }
 
   /// Runs a structured query over the top-level collection [collectionId].
@@ -322,17 +439,25 @@ class Firestore {
         ],
       if (limit != null) 'limit': limit,
     };
-    final response = await _http.post(
-      Uri.parse('$_documentsUrl:runQuery'),
-      headers: await _headers(),
-      body: jsonEncode({'structuredQuery': structuredQuery}),
-    );
-    if (response.statusCode != 200) _throw(response);
-    final rows = jsonDecode(response.body) as List<dynamic>;
+    final body = jsonEncode({'structuredQuery': structuredQuery});
+    // Keyed by the query itself, not just the collection: two different filters
+    // over one collection are two different reads and must not overwrite each
+    // other's cached answer.
+    final read = await _cachedRead(_cacheKey('query', body), () async {
+      final response = await _http.post(
+        Uri.parse('$_documentsUrl:runQuery'),
+        headers: await _headers(),
+        body: body,
+      );
+      if (response.statusCode != 200) _throw(response);
+      return response.body;
+    });
+    final rows = jsonDecode(read.payload) as List<dynamic>;
     return [
       for (final row in rows)
         if ((row as Map)['document'] != null)
-          Document.fromJson((row['document'] as Map).cast<String, dynamic>()),
+          _decode(
+              (row['document'] as Map).cast<String, dynamic>(), read.fromCache),
     ];
   }
 

@@ -28,6 +28,11 @@ small, dependency-light client:
   collection listing, structured queries (`runQuery` with typed filters), and
   a polling change stream for platforms without the gRPC `Listen` API
   (cancelling its subscription stops the loop promptly).
+- **`FirestoreCache`** -- offline reads. Point `Firestore` at a cache and every
+  successful get, list and query is stored; a later read that cannot reach the
+  server is answered from it, with `Document.fromCache` set so the caller can
+  say the data is a snapshot. `FileFirestoreCache` survives a relaunch,
+  `InMemoryFirestoreCache` lasts as long as the process. Off by default.
 - **`FirestoreValueCodec`** -- lossless conversion between plain Dart values
   and Firestore's REST `Value` JSON (null, bool, int, double, String,
   DateTime, bytes, GeoPoint, document references, lists, maps).
@@ -36,7 +41,8 @@ small, dependency-light client:
 
 - Realtime listeners (`Listen` is gRPC-only; `pollCollection` is the honest
   REST substitute).
-- Offline persistence or local caching.
+- Queued offline writes. Reads are cached (see `FirestoreCache`); a write still
+  needs a connection, and fails at the call site without one.
 - Transactions and aggregate queries.
 - Other Firebase products (Storage, Functions, RTDB, Messaging).
 
