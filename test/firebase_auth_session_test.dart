@@ -1,4 +1,5 @@
 import 'dart:convert';
+import 'dart:io';
 
 import 'package:http/http.dart' as http;
 import 'package:http/testing.dart';
@@ -141,6 +142,30 @@ void main() {
         await session.restore({'uid': 'u', 'refreshToken': 'dead'}),
         isNull,
       );
+    });
+
+    test('restore keeps the session when the server is unreachable', () async {
+      // The apps using this run in a pit and on a competition floor. Relaunching
+      // in a dead spot signed the scout out, because restore treated "could not
+      // reach Google" the same as "Google refused the token" (#5).
+      final session = FirebaseAuthSession(
+        apiKey: 'key',
+        httpClient: MockClient((_) async {
+          throw const SocketException('Failed host lookup');
+        }),
+      );
+
+      final user = await session.restore({
+        'uid': 'uid-1',
+        'displayName': 'Dana',
+        'refreshToken': 'refresh-1',
+      });
+
+      expect(user?.uid, 'uid-1');
+      expect(user?.displayName, 'Dana');
+      // Signed in, but with no usable token until the network returns, which is
+      // the honest state: a valid session is not a valid token.
+      expect(session.currentUser?.uid, 'uid-1');
     });
 
     test('sign-in errors surface the API message', () async {

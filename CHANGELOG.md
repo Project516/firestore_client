@@ -15,7 +15,23 @@
   data would be wrong. A 429 or 5xx does fall back, as does any failure to reach
   the server at all. A 404 also drops the cached copy, so a deleted document
   cannot come back.
-- `Firestore.clearCache()`, for sign-out. `FileFirestoreCache.clear()` removes
+- `Firestore.clearCache()`, for sign-out.
+- Offline writes. `Firestore` takes an optional `FirestoreWriteQueue`; a write
+  that cannot reach the server is queued and `flushWrites()` replays it. Writes
+  replay oldest first and the flush stops at the first still-unreachable one, so
+  order is preserved. A write the server *refuses* (403, a failed `exists`
+  precondition) is dropped and reported in `FlushResult.rejected` rather than
+  blocking the queue behind it forever.
+- A queued `setDocument` or `createDocument` returns a local `Document` with
+  `fromCache` set: the caller's own value, since the server has not seen it. A
+  `createDocument` with no explicit id is never queued, because the id would come
+  from the server.
+- An offline `deleteDocument` drops the cached copy immediately, so a later
+  offline read cannot serve a document the caller already deleted.
+- `FirebaseAuthSession.restore` keeps the session when the token endpoint cannot
+  be reached, instead of treating that as a revoked token and signing the user
+  out. A relaunch with no network resolves the persisted user; `getIdToken`
+  still fails until the network returns. `FileFirestoreCache.clear()` removes
   only its own entries and leaves the directory in place, so a cache pointed at
   a directory the host also uses cannot delete unrelated state.
 - `FileFirestoreCache` hashes keys into filenames, so a long key (a `runQuery`

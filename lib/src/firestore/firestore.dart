@@ -4,6 +4,7 @@ import 'dart:convert';
 import 'package:http/http.dart' as http;
 
 import 'cache.dart';
+import 'write_queue.dart';
 import 'value_codec.dart';
 
 /// A Firestore document: its path, decoded fields, and server timestamps.
@@ -119,9 +120,11 @@ class Firestore {
     this.databaseId = '(default)',
     http.Client? httpClient,
     FirestoreCache? cache,
+    FirestoreWriteQueue? writeQueue,
   })  : _idToken = idTokenProvider,
         _http = httpClient ?? http.Client(),
-        _cache = cache;
+        _cache = cache,
+        _queue = writeQueue;
 
   final String projectId;
   final String databaseId;
@@ -134,8 +137,116 @@ class Firestore {
   /// should be.
   final FirestoreCache? _cache;
 
+  /// Where writes wait when the server cannot be reached. Null disables
+  /// queueing, which is the default: a queued write changes what a failed write
+  /// means, and that has to be the caller's choice.
+  final FirestoreWriteQueue? _queue;
+
   /// True when the client has somewhere to cache reads.
   bool get isCaching => _cache != null;
+
+  /// True when the client has somewhere to queue writes.
+  bool get isQueueingWrites => _queue != null;
+
+  /// How many writes are waiting to be sent.
+  Future<int> get pendingWriteCount async =>
+      (await _queue?.load())?.length ?? 0;
+
+  /// Sends the queued writes, oldest first, and reports what happened.
+  ///
+  /// Stops at the first write the server cannot be reached for, leaving it and
+  /// everything after it queued: replaying out of order would let a later write
+  /// land before an earlier one to the same document. A write the server
+  /// *refuses* is dropped and reported in [FlushResult.rejected], because
+  /// retrying it forever would block the queue behind it.
+  ///
+  /// Safe to call when nothing is queued, and safe to call repeatedly.
+  Future<FlushResult> flushWrites() async {
+    final queue = _queue;
+    if (queue == null) {
+      return const FlushResult(replayed: 0, rejected: [], pending: 0);
+    }
+    final writes = await queue.load()
+      ..sort((a, b) => a.sequence.compareTo(b.sequence));
+    var replayed = 0;
+    final rejected = <({QueuedWrite write, Object error})>[];
+    final remaining = <QueuedWrite>[];
+    for (var i = 0; i < writes.length; i++) {
+      final write = writes[i];
+      if (remaining.isNotEmpty) {
+        // Already stopped on an unreachable server; everything after it keeps
+        // its place in line.
+        remaining.add(write);
+        continue;
+      }
+      try {
+        await _send(write);
+        replayed++;
+      } catch (error) {
+        if (_isUnreachable(error)) {
+          remaining.add(write);
+        } else {
+          rejected.add((write: write, error: error));
+        }
+      }
+    }
+    await queue.save(remaining);
+    return FlushResult(
+      replayed: replayed,
+      rejected: rejected,
+      pending: remaining.length,
+    );
+  }
+
+  /// Replays one queued write against the server.
+  Future<void> _send(QueuedWrite write) {
+    switch (write.kind) {
+      case QueuedWriteKind.create:
+      case QueuedWriteKind.set:
+        // A queued create replays as a set against its explicit path. The
+        // create endpoint would fail the second time a flush ran after a
+        // partial success, and a set is what the caller meant either way.
+        return _setDocumentRemote(
+          write.path,
+          write.fields,
+          updateMask: write.updateMask,
+        );
+      case QueuedWriteKind.commit:
+        return _commitUpdateRemote(
+          write.path,
+          fields: write.fields,
+          updateMask: write.updateMask,
+          appendMissingElements: write.appendMissingElements,
+          removeAllFromArray: write.removeAllFromArray,
+          mustExist: write.mustExist,
+        );
+      case QueuedWriteKind.delete:
+        return _deleteDocumentRemote(write.path);
+    }
+  }
+
+  /// Whether [error] means the server was never reached, so the write should
+  /// stay queued rather than being reported as refused.
+  ///
+  /// Same rule as the read path: an answer from the server, unless it says the
+  /// server was temporarily unable to give one.
+  bool _isUnreachable(Object error) {
+    if (error is! FirestoreApiException) return true;
+    return error.statusCode == 429 || error.statusCode >= 500;
+  }
+
+  /// Adds [write] to the queue and returns true, or returns false when there is
+  /// no queue and the caller should see the original failure.
+  Future<bool> _enqueue(QueuedWrite Function(int sequence) build) async {
+    final queue = _queue;
+    if (queue == null) return false;
+    final writes = await queue.load();
+    final next = writes.isEmpty
+        ? 1
+        : writes.map((w) => w.sequence).reduce((a, b) => a > b ? a : b) + 1;
+    await queue.save(<QueuedWrite>[...writes, build(next)]);
+    return true;
+  }
 
   /// Drops every cached read. Call it on sign-out: the cache holds documents
   /// the previous user was allowed to see.
@@ -283,19 +394,93 @@ class Firestore {
     final uri = Uri.parse('$_documentsUrl/$collectionPath').replace(
       queryParameters: {if (id != null) 'documentId': id},
     );
-    final response = await _http.post(
-      uri,
-      headers: await _headers(),
-      body: jsonEncode({'fields': FirestoreValueCodec.encodeFields(data)}),
-    );
-    if (response.statusCode != 200) _throw(response);
-    return Document.fromJson(jsonDecode(response.body) as Map<String, dynamic>);
+    try {
+      final response = await _http.post(
+        uri,
+        headers: await _headers(),
+        body: jsonEncode({'fields': FirestoreValueCodec.encodeFields(data)}),
+      );
+      if (response.statusCode != 200) _throw(response);
+      return Document.fromJson(
+        jsonDecode(response.body) as Map<String, dynamic>,
+      );
+    } catch (error) {
+      // Only an explicit id can be queued. Without one the id comes from the
+      // server, and handing the caller an invented id would name a document
+      // that may never exist under that name.
+      if (id == null || !_isUnreachable(error)) rethrow;
+      final path = '$collectionPath/$id';
+      final queued = await _enqueue(
+        (sequence) => QueuedWrite(
+          sequence: sequence,
+          kind: QueuedWriteKind.create,
+          path: path,
+          fields: data,
+        ),
+      );
+      if (!queued) rethrow;
+      return _localDocument(path, data);
+    }
   }
 
   /// Writes the document at [path], creating or fully replacing it. With
   /// [updateMask] only the named fields are changed and the rest of the
   /// document is preserved (a merge/partial update).
+  ///
+  /// With a write queue configured, a write that cannot reach the server is
+  /// queued and a local [Document] is returned with [Document.fromCache] set:
+  /// the caller's own value, not the server's, because the server has not seen
+  /// it yet. Call [flushWrites] when the network is back.
   Future<Document> setDocument(
+    String path,
+    Map<String, dynamic> data, {
+    List<String>? updateMask,
+  }) async {
+    try {
+      return await _setDocumentReturning(path, data, updateMask: updateMask);
+    } catch (error) {
+      if (!_isUnreachable(error)) rethrow;
+      final queued = await _enqueue(
+        (sequence) => QueuedWrite(
+          sequence: sequence,
+          kind: QueuedWriteKind.set,
+          path: path,
+          fields: data,
+          updateMask: updateMask,
+        ),
+      );
+      if (!queued) rethrow;
+      return _localDocument(path, data);
+    }
+  }
+
+  /// The document the caller just wrote, as this client understands it while the
+  /// write is still queued. Marked [Document.fromCache], and carrying no
+  /// `createTime` or `updateTime`, because only the server can set those.
+  Document _localDocument(String path, Map<String, dynamic> fields) => Document(
+        name: 'projects/$projectId/databases/$databaseId/documents/$path',
+        fields: Map<String, dynamic>.unmodifiable(fields),
+        fromCache: true,
+      );
+
+  Future<Document> _setDocumentReturning(
+    String path,
+    Map<String, dynamic> data, {
+    List<String>? updateMask,
+  }) async {
+    final response = await _patch(path, data, updateMask: updateMask);
+    return Document.fromJson(jsonDecode(response.body) as Map<String, dynamic>);
+  }
+
+  Future<void> _setDocumentRemote(
+    String path,
+    Map<String, dynamic> data, {
+    List<String>? updateMask,
+  }) async {
+    await _patch(path, data, updateMask: updateMask);
+  }
+
+  Future<http.Response> _patch(
     String path,
     Map<String, dynamic> data, {
     List<String>? updateMask,
@@ -315,7 +500,50 @@ class Firestore {
       body: jsonEncode({'fields': FirestoreValueCodec.encodeFields(data)}),
     );
     if (response.statusCode != 200) _throw(response);
-    return Document.fromJson(jsonDecode(response.body) as Map<String, dynamic>);
+    return response;
+  }
+
+  /// Updates the document at [path] through `documents:commit`, queueing it when
+  /// the server cannot be reached.
+  ///
+  /// Prefer this over [setDocument] for a queued write that others may also be
+  /// making: [appendMissingElements] and [removeAllFromArray] are applied by the
+  /// server, so two clients replaying after an outage merge instead of
+  /// overwriting each other. A plain field set is last-write-wins, which for a
+  /// queued write means last-*replayed*-wins.
+  Future<void> commitUpdate(
+    String path, {
+    Map<String, dynamic> fields = const {},
+    List<String>? updateMask,
+    Map<String, List<Object?>> appendMissingElements = const {},
+    Map<String, List<Object?>> removeAllFromArray = const {},
+    bool mustExist = false,
+  }) async {
+    try {
+      await _commitUpdateRemote(
+        path,
+        fields: fields,
+        updateMask: updateMask,
+        appendMissingElements: appendMissingElements,
+        removeAllFromArray: removeAllFromArray,
+        mustExist: mustExist,
+      );
+    } catch (error) {
+      if (!_isUnreachable(error)) rethrow;
+      final queued = await _enqueue(
+        (sequence) => QueuedWrite(
+          sequence: sequence,
+          kind: QueuedWriteKind.commit,
+          path: path,
+          fields: fields,
+          updateMask: updateMask ?? fields.keys.toList(growable: false),
+          appendMissingElements: appendMissingElements,
+          removeAllFromArray: removeAllFromArray,
+          mustExist: mustExist,
+        ),
+      );
+      if (!queued) rethrow;
+    }
   }
 
   /// Updates the document at [path] through `documents:commit`, which is the
@@ -328,7 +556,7 @@ class Firestore {
   /// overwriting each other. With [mustExist] the write fails (`NOT_FOUND` /
   /// `FAILED_PRECONDITION`, see [FirestoreApiException.isNotFound]) instead of
   /// creating the document.
-  Future<void> commitUpdate(
+  Future<void> _commitUpdateRemote(
     String path, {
     Map<String, dynamic> fields = const {},
     List<String>? updateMask,
@@ -381,7 +609,28 @@ class Firestore {
   }
 
   /// Deletes the document at [path]. Deleting a missing document succeeds.
+  ///
+  /// Queued when the server cannot be reached, and the cached copy is dropped
+  /// immediately so a later read does not serve a document the caller has
+  /// already deleted.
   Future<void> deleteDocument(String path) async {
+    try {
+      await _deleteDocumentRemote(path);
+    } catch (error) {
+      if (!_isUnreachable(error)) rethrow;
+      final queued = await _enqueue(
+        (sequence) => QueuedWrite(
+          sequence: sequence,
+          kind: QueuedWriteKind.delete,
+          path: path,
+        ),
+      );
+      if (!queued) rethrow;
+    }
+    await _cache?.remove(_cacheKey('doc', path));
+  }
+
+  Future<void> _deleteDocumentRemote(String path) async {
     final response = await _http.delete(
       Uri.parse('$_documentsUrl/$path'),
       headers: await _headers(),

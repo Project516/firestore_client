@@ -163,8 +163,19 @@ class FirebaseAuthSession {
     _refreshToken = refreshToken;
     _idToken = 'expired';
     _expiresAt = null;
-    final token = await _refresh();
-    if (token == null) return null;
+    try {
+      final token = await _refresh();
+      // A null here means Google answered and refused: the refresh token was
+      // revoked or expired, so the session really is over.
+      if (token == null) return null;
+    } catch (_) {
+      // The server could not be reached, which is not the same thing. The user
+      // stays signed in on the strength of the persisted session, keeping the
+      // refresh token so a later call can exchange it. `getIdToken` still fails
+      // until the network returns, which is honest: there is no valid token yet,
+      // only a valid session. Relaunching in a dead spot must not sign a scout
+      // out of an app whose whole point is working there (#5).
+    }
     _user = FirebaseUser(
       uid: uid,
       displayName: (json['displayName'] as String?) ?? '',
