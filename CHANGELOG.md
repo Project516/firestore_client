@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.2.0
 
 - `Firestore.pollCollection`: cancelling the subscription now stops the polling
   loop promptly, even while it is waiting between polls; the pending delay
