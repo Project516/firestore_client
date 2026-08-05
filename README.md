@@ -28,6 +28,16 @@ small, dependency-light client:
   collection listing, structured queries (`runQuery` with typed filters), and
   a polling change stream for platforms without the gRPC `Listen` API
   (cancelling its subscription stops the loop promptly).
+- **`FirestoreCache`** -- offline reads. Point `Firestore` at a cache and every
+  successful get, list and query is stored; a later read that cannot reach the
+  server is answered from it, with `Document.fromCache` set so the caller can
+  say the data is a snapshot. `FileFirestoreCache` survives a relaunch,
+  `InMemoryFirestoreCache` lasts as long as the process. Off by default.
+- **`FirestoreWriteQueue`** -- offline writes. Point `Firestore` at a queue and a
+  write that cannot reach the server is kept instead of thrown away;
+  `flushWrites()` replays them oldest first and reports what landed, what the
+  server refused, and what is still waiting. `commitUpdate`'s array transforms
+  are the safe thing to queue, since the server merges them. Off by default.
 - **`FirestoreValueCodec`** -- lossless conversion between plain Dart values
   and Firestore's REST `Value` JSON (null, bool, int, double, String,
   DateTime, bytes, GeoPoint, document references, lists, maps).
@@ -36,8 +46,9 @@ small, dependency-light client:
 
 - Realtime listeners (`Listen` is gRPC-only; `pollCollection` is the honest
   REST substitute).
-- Offline persistence or local caching.
-- Transactions and aggregate queries.
+- Transactions and multi-document atomicity. A queued write is replayed on its
+  own, not as part of a batch.
+- Aggregate queries.
 - Other Firebase products (Storage, Functions, RTDB, Messaging).
 
 Contributions welcome for any of these.
@@ -88,6 +99,10 @@ the session on the next launch with `session.restore(...)`.
   confidentiality.
 - `FirebaseAuthSession.toJson()` contains the refresh token. Store it in a
   private location.
+- `FileFirestoreCache` writes document payloads to disk as plaintext, and those
+  documents are whatever the signed-in user was allowed to read. Point it at a
+  private directory, and call `Firestore.clearCache()` on sign-out so the next
+  user cannot read the previous one's data.
 - All access control must live in your Firestore security rules, exactly as
   with the official SDKs.
 

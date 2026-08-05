@@ -5,6 +5,40 @@
 - `Firestore.pollCollection`: cancelling the subscription now stops the polling
   loop promptly, even while it is waiting between polls; the pending delay
   resolves early instead of letting the loop run a final poll afterward.
+- Offline reads. `Firestore` takes an optional `FirestoreCache`; a successful
+  `getDocument`, `listDocuments` or `runQuery` is cached, and a later read that
+  cannot reach the server is served from the cache with `Document.fromCache`
+  set. `FileFirestoreCache` persists across a relaunch,
+  `InMemoryFirestoreCache` does not. Without a cache the client behaves exactly
+  as before.
+- A 403 or 404 never falls back to cached data: the server answered, so stale
+  data would be wrong. A 429 or 5xx does fall back, as does any failure to reach
+  the server at all. A 404 also drops the cached copy, so a deleted document
+  cannot come back.
+- `Firestore.clearCache()`, for sign-out.
+- Offline writes. `Firestore` takes an optional `FirestoreWriteQueue`; a write
+  that cannot reach the server is queued and `flushWrites()` replays it. Writes
+  replay oldest first and the flush stops at the first still-unreachable one, so
+  order is preserved. A write the server *refuses* (403, a failed `exists`
+  precondition) is dropped and reported in `FlushResult.rejected` rather than
+  blocking the queue behind it forever.
+- A queued `setDocument` or `createDocument` returns a local `Document` with
+  `fromCache` set: the caller's own value, since the server has not seen it. A
+  `createDocument` with no explicit id is never queued, because the id would come
+  from the server.
+- An offline `deleteDocument` drops the cached copy immediately, so a later
+  offline read cannot serve a document the caller already deleted.
+- `FirebaseAuthSession.restore` keeps the session when the token endpoint cannot
+  be reached, instead of treating that as a revoked token and signing the user
+  out. A relaunch with no network resolves the persisted user; `getIdToken`
+  still fails until the network returns. `FileFirestoreCache.clear()` removes
+  only its own entries and leaves the directory in place, so a cache pointed at
+  a directory the host also uses cannot delete unrelated state.
+- `FileFirestoreCache` hashes keys into filenames, so a long key (a `runQuery`
+  key holds the whole encoded query) stays inside the filesystem's name limit,
+  and each write uses its own temporary file.
+- A cache that throws on write never downgrades a successful read: the payload
+  the server returned is still returned, uncached.
 
 ## 0.1.0
 
