@@ -27,6 +27,17 @@ class FileFirestoreCache implements FirestoreCache {
   /// entries from anything else in a directory it does not own.
   static const String _extension = '.fcache';
 
+  /// Whether [path] is a file this cache created: a finished entry, or a
+  /// temporary one left behind by a process that died mid-write.
+  ///
+  /// A bare `.tmp` check would be wrong for the same reason deleting the whole
+  /// directory was: the host may keep its own temporary files here. A temp file
+  /// of ours always has [_extension] before the counter, so the pair of
+  /// conditions matches only what we wrote.
+  static bool _isOwn(String path) =>
+      path.endsWith(_extension) ||
+      (path.contains('$_extension.') && path.endsWith('.tmp'));
+
   File _fileFor(String key) {
     // Hashed, not encoded. base64url round-trips and reads nicely, but a
     // runQuery key holds the whole encoded query body, and encoding that
@@ -95,7 +106,7 @@ class FileFirestoreCache implements FirestoreCache {
     try {
       if (!await directory.exists()) return;
       await for (final entry in directory.list()) {
-        if (entry is File && entry.path.endsWith(_extension)) {
+        if (entry is File && _isOwn(entry.path)) {
           try {
             await entry.delete();
           } on FileSystemException {

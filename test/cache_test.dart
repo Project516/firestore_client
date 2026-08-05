@@ -438,6 +438,25 @@ void main() {
       expect(await cache.read('same-key'), anyOf(first, second));
     });
 
+    test('clear removes a temp file left by a crashed write', () async {
+      // A temp file is <digest>.fcache.<n>.tmp, so it does not end with the
+      // entry extension. A process that dies between the write and the rename
+      // used to leave it behind with nothing to ever collect it.
+      final cache = FileFirestoreCache(dir);
+      await cache.write('mine', 'payload');
+      final orphan = File('${dir.path}/deadbeef.fcache.7.tmp')
+        ..writeAsStringSync('half a payload');
+      // A temp file belonging to the host, which must survive: matching a bare
+      // '.tmp' would be the same mistake as deleting the whole directory.
+      final foreignTemp = File('${dir.path}/host-upload.tmp')
+        ..writeAsStringSync('not ours');
+
+      await cache.clear();
+
+      expect(orphan.existsSync(), isFalse);
+      expect(foreignTemp.existsSync(), isTrue);
+    });
+
     test('clear leaves files the cache did not write', () async {
       // clearCache() runs on sign-out, and a host may point the cache at a
       // directory that already holds its own state, including the persisted
