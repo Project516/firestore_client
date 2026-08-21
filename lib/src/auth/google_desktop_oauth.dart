@@ -69,7 +69,7 @@ class GoogleDesktopOAuth {
         ),
       );
       final code = await _awaitRedirectCode(server, state, successHtml);
-      return exchangeCode(
+      return await exchangeCode(
         code: code,
         codeVerifier: verifier,
         redirectUri: redirectUri,
