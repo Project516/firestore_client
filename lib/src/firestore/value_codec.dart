@@ -61,7 +61,16 @@ class FirestoreValueCodec {
     // int before double: `is double` is false for int on the VM but the
     // integerValue wire form is a string either way.
     if (value is int) return {'integerValue': value.toString()};
-    if (value is double) return {'doubleValue': value};
+    if (value is double) {
+      // JSON has no non-finite number literals. Firestore's REST representation
+      // uses strings for these IEEE 754 values instead.
+      if (value.isNaN) return {'doubleValue': 'NaN'};
+      if (value == double.infinity) return {'doubleValue': 'Infinity'};
+      if (value == double.negativeInfinity) {
+        return {'doubleValue': '-Infinity'};
+      }
+      return {'doubleValue': value};
+    }
     if (value is String) return {'stringValue': value};
     if (value is DateTime) {
       return {'timestampValue': value.toUtc().toIso8601String()};
@@ -112,7 +121,19 @@ class FirestoreValueCodec {
       return int.parse(value['integerValue'] as String);
     }
     if (value.containsKey('doubleValue')) {
-      return (value['doubleValue'] as num).toDouble();
+      final raw = value['doubleValue'];
+      if (raw is num) return raw.toDouble();
+      if (raw is String) {
+        switch (raw) {
+          case 'NaN':
+            return double.nan;
+          case 'Infinity':
+            return double.infinity;
+          case '-Infinity':
+            return double.negativeInfinity;
+        }
+      }
+      throw FormatException('Invalid Firestore doubleValue: $raw');
     }
     if (value.containsKey('stringValue')) return value['stringValue'] as String;
     if (value.containsKey('timestampValue')) {

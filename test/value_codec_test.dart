@@ -48,6 +48,30 @@ void main() {
       expect(FirestoreValueCodec.decode({'integerValue': '7'}), 7);
     });
 
+    test('round-trips non-finite doubles using the REST string form', () {
+      expect(FirestoreValueCodec.encode(double.nan), {'doubleValue': 'NaN'});
+      expect(
+        FirestoreValueCodec.encode(double.infinity),
+        {'doubleValue': 'Infinity'},
+      );
+      expect(
+        FirestoreValueCodec.encode(double.negativeInfinity),
+        {'doubleValue': '-Infinity'},
+      );
+      expect(
+        (FirestoreValueCodec.decode({'doubleValue': 'NaN'}) as double).isNaN,
+        isTrue,
+      );
+      expect(
+        FirestoreValueCodec.decode({'doubleValue': 'Infinity'}),
+        double.infinity,
+      );
+      expect(
+        FirestoreValueCodec.decode({'doubleValue': '-Infinity'}),
+        double.negativeInfinity,
+      );
+    });
+
     test('timestamps are normalized to UTC', () {
       final local = DateTime(2026, 7, 8, 12);
       final encoded = FirestoreValueCodec.encode(local);
