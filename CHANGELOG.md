@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.2.1
+
+- Non-finite doubles. Firestore encodes `NaN`, `Infinity` and `-Infinity` as
+  strings in REST values; the codec now writes them in that form instead of
+  emitting invalid JSON, and reads them back as Dart doubles.
+- `signIn` awaits `exchangeCode` inside its `try` block. Same behavior, and it
+  clears `unawaited_return_in_try_block` under Dart 3.13.1's analyzer.
+
 ## 0.2.0
 
 - `Firestore.pollCollection`: cancelling the subscription now stops the polling
