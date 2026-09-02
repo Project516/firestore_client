@@ -1,0 +1,85 @@
+{
+ "name": "projects/example-project/databases/(default)/documents/scoutEntries/000ebdb1-7c61-4ff0-8568-a087f38c9e67",
+ "fields": {
+  "teamNumber": {
+   "integerValue": "4414"
+  },
+  "updatedAtTs": {
+   "timestampValue": "2026-07-30T17:01:04.774827Z"
+  },
+  "byPhase": {
+   "mapValue": {
+    "fields": {
+     "auton": {
+      "mapValue": {
+       "fields": {
+        "counters": {
+         "mapValue": {}
+        },
+        "notes": {
+         "stringValue": ""
+        },
+        "penalties": {
+         "integerValue": "0"
+        },
+        "score": {
+         "integerValue": "0"
+        }
+       }
+      }
+     },
+     "teleop": {
+      "mapValue": {
+       "fields": {
+        "counters": {
+         "mapValue": {}
+        },
+        "notes": {
+         "stringValue": ""
+        },
+        "penalties": {
+         "integerValue": "0"
+        },
+        "score": {
+         "integerValue": "12"
+        }
+       }
+      }
+     }
+    }
+   }
+  },
+  "fieldValues": {
+   "mapValue": {
+    "fields": {
+     "scouter": {
+      "stringValue": "Scout One"
+     },
+     "matchNumber": {
+      "stringValue": "1"
+     },
+     "autoFuelScored": {
+      "integerValue": "90"
+     },
+     "teleopFuelScored": {
+      "integerValue": "270"
+     },
+     "scoringEff": {
+      "doubleValue": 96
+     },
+     "tRpasser": {
+      "booleanValue": true
+     },
+     "ryCard": {
+      "booleanValue": false
+     },
+     "comments": {
+      "stringValue": "good"
+     }
+    }
+   }
+  }
+ },
+ "createTime": "2026-07-30T17:01:05.055723Z",
+ "updateTime": "2026-07-30T17:01:05.055723Z"
+}

@@ -1,5 +1,21 @@
 # Changelog
 
+## Unreleased
+
+- `FirestoreValueCodec` and `Document.fromJson` are now tested against a
+  Firestore REST document whose wire encoding was read from a live database
+  rather than written from memory. No behavior change and no version bump:
+  the audit found the codec already correct, including the three encodings
+  most easily got wrong from the docs alone (`integerValue` as a JSON string,
+  an integral `doubleValue` as a bare number, and an empty map arriving as
+  `{"mapValue": {}}` with no `fields` key).
+
+  Prompted by `statbotics_client` v0.4.0, where models that had never run
+  against a live body shipped four releases broken while their hand-written
+  tests passed, because the tests agreed with the models rather than the API.
+  See `test/fixtures/README.md` for what the fixture preserves verbatim and
+  what is substituted.
+
 ## 0.2.1
 
 - Non-finite doubles. Firestore encodes `NaN`, `Infinity` and `-Infinity` as
