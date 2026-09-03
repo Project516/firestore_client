@@ -253,14 +253,16 @@ void main() {
             'idToken': 'fb-token-3',
             'refreshToken': 'refresh-3',
             'expiresIn': '3600',
-            'displayName': 'Dana',
-            'email': 'dana@example.com',
           }),
           200,
         );
       }));
       final user = await session.linkGoogleIdToken('second-google');
       expect(user.uid, 'uid-1');
+      // The link response describes the credential, not the account, so the
+      // account's own name and email survive it.
+      expect(user.displayName, 'Dana');
+      expect(user.email, 'dana@example.com');
       expect(await session.getIdToken(), 'fb-token-3');
     });
 
@@ -269,14 +271,22 @@ void main() {
         expect(request.url.path, endsWith('accounts:update'));
         final body = jsonDecode(request.body) as Map<String, dynamic>;
         expect(body['deleteProvider'], ['google.com']);
+        expect(body['returnSecureToken'], isTrue);
         return http.Response(
-          jsonEncode({'localId': 'uid-1', 'providerUserInfo': []}),
+          jsonEncode({
+            'localId': 'uid-1',
+            'providerUserInfo': [],
+            'idToken': 'fb-token-4',
+            'refreshToken': 'refresh-4',
+            'expiresIn': '3600',
+          }),
           200,
         );
       }));
       final user = await session.unlinkProvider('google.com');
       expect(user.displayName, 'Dana');
-      expect(await session.getIdToken(), 'fb-token');
+      // The old token still claimed the provider that was just removed.
+      expect(await session.getIdToken(), 'fb-token-4');
     });
 
     test('linkedProviders reads providerUserInfo', () async {

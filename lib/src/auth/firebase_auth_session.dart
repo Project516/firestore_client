@@ -130,7 +130,10 @@ class FirebaseAuthSession {
       'requestUri': requestUri,
       'returnSecureToken': true,
     });
-    return _adopt(data);
+    // Not _adopt: the response describes the credential just linked, so it
+    // can omit the account's own displayName, email or photo. Linking must
+    // not blank them.
+    return _refreshUserFrom(data);
   }
 
   /// Links a second Google account. Convenience over [linkWithIdp].
@@ -152,6 +155,8 @@ class FirebaseAuthSession {
     final data = await _post('$_identityToolkit:update', {
       'idToken': await _requireIdToken(),
       'deleteProvider': [providerId],
+      // The current token still carries the provider that was just removed.
+      'returnSecureToken': true,
     });
     return _refreshUserFrom(data);
   }
