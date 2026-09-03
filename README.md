@@ -19,7 +19,10 @@ small, dependency-light client:
 - **`FirebaseAuthSession`** -- Firebase Authentication over the Identity
   Toolkit REST API: sign in with an identity provider credential (for example
   a Google ID token), automatic ID-token refresh via the Secure Token API,
-  and session persistence (`toJson`/`restore`).
+  and session persistence (`toJson`/`restore`). Also account management:
+  `updateDisplayName`, `linkGoogleIdToken` and `unlinkProvider` for signing
+  one account in with several credentials, and `linkedProviders` to list
+  them.
 - **`GoogleDesktopOAuth`** -- native-app Google sign-in for desktop: the
   standard loopback + PKCE OAuth flow (RFC 8252). Opens the system browser,
   captures the redirect on localhost, exchanges the code for tokens.

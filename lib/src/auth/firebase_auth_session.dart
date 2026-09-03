@@ -18,6 +18,22 @@ class FirebaseUser {
   final String? photoUrl;
 }
 
+/// One identity provider linked to a Firebase account.
+class LinkedProvider {
+  const LinkedProvider({
+    required this.providerId,
+    this.email,
+    this.displayName,
+    this.photoUrl,
+  });
+
+  /// The Identity Toolkit provider id, for example `google.com`.
+  final String providerId;
+  final String? email;
+  final String? displayName;
+  final String? photoUrl;
+}
+
 /// Error from the Identity Toolkit or Secure Token API.
 class FirebaseAuthException implements Exception {
   FirebaseAuthException(this.statusCode, this.message);
@@ -96,6 +112,93 @@ class FirebaseAuthSession {
       postBody: 'id_token=$googleIdToken&providerId=google.com',
       requestUri: requestUri,
     );
+  }
+
+  /// Links another provider credential to the signed-in account, so both
+  /// credentials sign in to the same uid.
+  ///
+  /// [postBody] and [requestUri] are as for [signInWithIdp]. Throws when
+  /// signed out, and with `FEDERATED_USER_ID_ALREADY_LINKED` when the
+  /// credential already belongs to another account.
+  Future<FirebaseUser> linkWithIdp({
+    required String postBody,
+    required String requestUri,
+  }) async {
+    final data = await _post('$_identityToolkit:signInWithIdp', {
+      'idToken': await _requireIdToken(),
+      'postBody': postBody,
+      'requestUri': requestUri,
+      'returnSecureToken': true,
+    });
+    // Tokens only. The response carries the *linked* provider's profile --
+    // the second Google account's own name, email and photo -- not the
+    // account's. Adopting those would swap the signed-in identity for the
+    // one just attached to it, which is not what linking means: the account
+    // keeps its own profile and merely gains a way to sign in.
+    return _adoptTokensKeepingUser(data);
+  }
+
+  /// Links a second Google account. Convenience over [linkWithIdp].
+  Future<FirebaseUser> linkGoogleIdToken(
+    String googleIdToken, {
+    String requestUri = 'http://localhost',
+  }) {
+    return linkWithIdp(
+      postBody: 'id_token=$googleIdToken&providerId=google.com',
+      requestUri: requestUri,
+    );
+  }
+
+  /// Unlinks [providerId] from the signed-in account.
+  ///
+  /// The caller is responsible for leaving at least one provider linked; an
+  /// account with none can no longer sign in.
+  Future<FirebaseUser> unlinkProvider(String providerId) async {
+    final data = await _post('$_identityToolkit:update', {
+      'idToken': await _requireIdToken(),
+      'deleteProvider': [providerId],
+      // The current token still carries the provider that was just removed.
+      'returnSecureToken': true,
+    });
+    return _refreshUserFrom(data);
+  }
+
+  /// The providers currently linked to the signed-in account.
+  Future<List<LinkedProvider>> linkedProviders() async {
+    final data = await _post('$_identityToolkit:lookup', {
+      'idToken': await _requireIdToken(),
+    });
+    final users = data['users'];
+    if (users is! List || users.isEmpty) return const [];
+    final info = (users.first as Map<String, dynamic>)['providerUserInfo'];
+    if (info is! List) return const [];
+    return info.whereType<Map<String, dynamic>>().map((entry) {
+      return LinkedProvider(
+        providerId: entry['providerId'] as String? ?? '',
+        email: entry['email'] as String?,
+        displayName: entry['displayName'] as String?,
+        photoUrl: entry['photoUrl'] as String?,
+      );
+    }).toList();
+  }
+
+  /// Sets the account's display name, the one Identity Toolkit reports back
+  /// on every later sign-in.
+  Future<FirebaseUser> updateDisplayName(String displayName) async {
+    final data = await _post('$_identityToolkit:update', {
+      'idToken': await _requireIdToken(),
+      'displayName': displayName,
+      'returnSecureToken': true,
+    });
+    return _refreshUserFrom(data);
+  }
+
+  Future<String> _requireIdToken() async {
+    final token = await getIdToken();
+    if (token == null) {
+      throw FirebaseAuthException(401, 'No user is signed in.');
+    }
+    return token;
   }
 
   /// Returns a valid Firebase ID token, refreshing it first when it is
@@ -225,6 +328,49 @@ class FirebaseAuthSession {
     );
     if (!_authState.isClosed) _authState.add(_user);
     return _user!;
+  }
+
+  /// Adopts the tokens of a response, leaving the current user's profile
+  /// exactly as it was.
+  FirebaseUser _adoptTokensKeepingUser(Map<String, dynamic> data) {
+    final current = _user;
+    if (current == null) {
+      throw FirebaseAuthException(401, 'No user is signed in.');
+    }
+    _adoptTokens(data);
+    if (!_authState.isClosed) _authState.add(current);
+    return current;
+  }
+
+  /// Adopts the user fields of an `accounts:update` response, and its tokens
+  /// when it carried any. Unlike [_adopt] this keeps the current session
+  /// alive when the response has no `idToken`, which `deleteProvider`
+  /// responses do not carry.
+  FirebaseUser _refreshUserFrom(Map<String, dynamic> data) {
+    final current = _user;
+    if (current == null) {
+      throw FirebaseAuthException(401, 'No user is signed in.');
+    }
+    _adoptTokens(data);
+    _user = FirebaseUser(
+      uid: current.uid,
+      displayName: (data['displayName'] as String?) ?? current.displayName,
+      email: (data['email'] as String?) ?? current.email,
+      photoUrl: (data['photoUrl'] as String?) ?? current.photoUrl,
+    );
+    if (!_authState.isClosed) _authState.add(_user);
+    return _user!;
+  }
+
+  /// Takes the tokens out of a response that carried new ones. A response
+  /// without an `idToken` leaves the session as it was: `deleteProvider`
+  /// answers that way.
+  void _adoptTokens(Map<String, dynamic> data) {
+    final idToken = data['idToken'] as String?;
+    if (idToken == null) return;
+    _idToken = idToken;
+    _refreshToken = (data['refreshToken'] as String?) ?? _refreshToken;
+    _expiresAt = _expiryFrom(data['expiresIn']);
   }
 
   DateTime? _expiryFrom(Object? expiresIn) {

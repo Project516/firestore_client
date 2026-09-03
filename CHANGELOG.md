@@ -1,13 +1,23 @@
 # Changelog
 
-## Unreleased
+## 0.3.0
 
+- `FirebaseAuthSession.updateDisplayName`, so an account can be renamed
+  without a re-sign-in. Fields the Identity Toolkit response omits are carried
+  over from the current user rather than cleared.
+- `FirebaseAuthSession.linkWithIdp` and `linkGoogleIdToken`: link a second
+  provider credential to the signed-in account, so both sign in to one uid.
+  The account keeps its own profile: the response carries the linked
+  provider's name and email, and adopting those would swap the signed-in
+  identity for the one just attached to it.
+- `FirebaseAuthSession.unlinkProvider` and `linkedProviders`, with the new
+  `LinkedProvider` type.
 - `FirestoreValueCodec` and `Document.fromJson` are now tested against a
   Firestore REST document whose wire encoding was read from a live database
-  rather than written from memory. No behavior change and no version bump:
-  the audit found the codec already correct, including the three encodings
-  most easily got wrong from the docs alone (`integerValue` as a JSON string,
-  an integral `doubleValue` as a bare number, and an empty map arriving as
+  rather than written from memory. No behavior change: the audit found the
+  codec already correct, including the three encodings most easily got wrong
+  from the docs alone (`integerValue` as a JSON string, an integral
+  `doubleValue` as a bare number, and an empty map arriving as
   `{"mapValue": {}}` with no `fields` key).
 
   Prompted by `statbotics_client` v0.4.0, where models that had never run
