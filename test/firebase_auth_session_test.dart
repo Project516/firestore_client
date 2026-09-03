@@ -188,6 +188,131 @@ void main() {
         ),
       );
     });
+
+    Future<FirebaseAuthSession> signedIn(MockClient client) async {
+      final session = FirebaseAuthSession(apiKey: 'key', httpClient: client);
+      await session.signInWithGoogleIdToken('google-token');
+      return session;
+    }
+
+    MockClient signInThen(
+      Future<http.Response> Function(http.Request request) handler,
+    ) {
+      return MockClient((request) async {
+        if (request.url.path.endsWith('accounts:signInWithIdp') &&
+            !(jsonDecode(request.body) as Map<String, dynamic>)
+                .containsKey('idToken')) {
+          return http.Response(
+            jsonEncode({
+              'localId': 'uid-1',
+              'idToken': 'fb-token',
+              'refreshToken': 'refresh-1',
+              'expiresIn': '3600',
+              'displayName': 'Dana',
+              'email': 'dana@example.com',
+            }),
+            200,
+          );
+        }
+        return handler(request);
+      });
+    }
+
+    test('updateDisplayName renames the user and keeps the session', () async {
+      final session = await signedIn(signInThen((request) async {
+        expect(request.url.path, endsWith('accounts:update'));
+        final body = jsonDecode(request.body) as Map<String, dynamic>;
+        expect(body['idToken'], 'fb-token');
+        expect(body['displayName'], 'Dana R');
+        return http.Response(
+          jsonEncode({
+            'localId': 'uid-1',
+            'displayName': 'Dana R',
+            'idToken': 'fb-token-2',
+            'refreshToken': 'refresh-2',
+            'expiresIn': '3600',
+          }),
+          200,
+        );
+      }));
+      final user = await session.updateDisplayName('Dana R');
+      expect(user.displayName, 'Dana R');
+      // Not echoed by the response, so carried over rather than dropped.
+      expect(user.email, 'dana@example.com');
+      expect(await session.getIdToken(), 'fb-token-2');
+    });
+
+    test('linkGoogleIdToken sends the current ID token', () async {
+      final session = await signedIn(signInThen((request) async {
+        final body = jsonDecode(request.body) as Map<String, dynamic>;
+        expect(body['idToken'], 'fb-token');
+        expect(body['postBody'], contains('id_token=second-google'));
+        return http.Response(
+          jsonEncode({
+            'localId': 'uid-1',
+            'idToken': 'fb-token-3',
+            'refreshToken': 'refresh-3',
+            'expiresIn': '3600',
+            'displayName': 'Dana',
+            'email': 'dana@example.com',
+          }),
+          200,
+        );
+      }));
+      final user = await session.linkGoogleIdToken('second-google');
+      expect(user.uid, 'uid-1');
+      expect(await session.getIdToken(), 'fb-token-3');
+    });
+
+    test('unlinkProvider keeps the display name the response omits', () async {
+      final session = await signedIn(signInThen((request) async {
+        expect(request.url.path, endsWith('accounts:update'));
+        final body = jsonDecode(request.body) as Map<String, dynamic>;
+        expect(body['deleteProvider'], ['google.com']);
+        return http.Response(
+          jsonEncode({'localId': 'uid-1', 'providerUserInfo': []}),
+          200,
+        );
+      }));
+      final user = await session.unlinkProvider('google.com');
+      expect(user.displayName, 'Dana');
+      expect(await session.getIdToken(), 'fb-token');
+    });
+
+    test('linkedProviders reads providerUserInfo', () async {
+      final session = await signedIn(signInThen((request) async {
+        expect(request.url.path, endsWith('accounts:lookup'));
+        return http.Response(
+          jsonEncode({
+            'users': [
+              {
+                'providerUserInfo': [
+                  {'providerId': 'google.com', 'email': 'dana@example.com'},
+                  {'providerId': 'google.com', 'email': 'dana@school.edu'},
+                ],
+              },
+            ],
+          }),
+          200,
+        );
+      }));
+      final providers = await session.linkedProviders();
+      expect(providers, hasLength(2));
+      expect(providers.last.email, 'dana@school.edu');
+    });
+
+    test('updateDisplayName throws when signed out', () async {
+      final session = FirebaseAuthSession(
+        apiKey: 'key',
+        httpClient: MockClient((request) async {
+          fail('should not reach the network');
+        }),
+      );
+      expect(
+        session.updateDisplayName('Dana'),
+        throwsA(isA<FirebaseAuthException>()),
+      );
+    });
   });
 
   group('GoogleDesktopOAuth', () {
