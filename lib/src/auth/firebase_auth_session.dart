@@ -130,10 +130,12 @@ class FirebaseAuthSession {
       'requestUri': requestUri,
       'returnSecureToken': true,
     });
-    // Not _adopt: the response describes the credential just linked, so it
-    // can omit the account's own displayName, email or photo. Linking must
-    // not blank them.
-    return _refreshUserFrom(data);
+    // Tokens only. The response carries the *linked* provider's profile --
+    // the second Google account's own name, email and photo -- not the
+    // account's. Adopting those would swap the signed-in identity for the
+    // one just attached to it, which is not what linking means: the account
+    // keeps its own profile and merely gains a way to sign in.
+    return _adoptTokensKeepingUser(data);
   }
 
   /// Links a second Google account. Convenience over [linkWithIdp].
@@ -328,6 +330,18 @@ class FirebaseAuthSession {
     return _user!;
   }
 
+  /// Adopts the tokens of a response, leaving the current user's profile
+  /// exactly as it was.
+  FirebaseUser _adoptTokensKeepingUser(Map<String, dynamic> data) {
+    final current = _user;
+    if (current == null) {
+      throw FirebaseAuthException(401, 'No user is signed in.');
+    }
+    _adoptTokens(data);
+    if (!_authState.isClosed) _authState.add(current);
+    return current;
+  }
+
   /// Adopts the user fields of an `accounts:update` response, and its tokens
   /// when it carried any. Unlike [_adopt] this keeps the current session
   /// alive when the response has no `idToken`, which `deleteProvider`
@@ -337,12 +351,7 @@ class FirebaseAuthSession {
     if (current == null) {
       throw FirebaseAuthException(401, 'No user is signed in.');
     }
-    final idToken = data['idToken'] as String?;
-    if (idToken != null) {
-      _idToken = idToken;
-      _refreshToken = (data['refreshToken'] as String?) ?? _refreshToken;
-      _expiresAt = _expiryFrom(data['expiresIn']);
-    }
+    _adoptTokens(data);
     _user = FirebaseUser(
       uid: current.uid,
       displayName: (data['displayName'] as String?) ?? current.displayName,
@@ -351,6 +360,17 @@ class FirebaseAuthSession {
     );
     if (!_authState.isClosed) _authState.add(_user);
     return _user!;
+  }
+
+  /// Takes the tokens out of a response that carried new ones. A response
+  /// without an `idToken` leaves the session as it was: `deleteProvider`
+  /// answers that way.
+  void _adoptTokens(Map<String, dynamic> data) {
+    final idToken = data['idToken'] as String?;
+    if (idToken == null) return;
+    _idToken = idToken;
+    _refreshToken = (data['refreshToken'] as String?) ?? _refreshToken;
+    _expiresAt = _expiryFrom(data['expiresIn']);
   }
 
   DateTime? _expiryFrom(Object? expiresIn) {

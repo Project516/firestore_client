@@ -242,27 +242,31 @@ void main() {
       expect(await session.getIdToken(), 'fb-token-2');
     });
 
-    test('linkGoogleIdToken sends the current ID token', () async {
+    test('linkGoogleIdToken keeps the account it linked to', () async {
       final session = await signedIn(signInThen((request) async {
         final body = jsonDecode(request.body) as Map<String, dynamic>;
         expect(body['idToken'], 'fb-token');
         expect(body['postBody'], contains('id_token=second-google'));
+        // The real response carries the profile of the provider just linked,
+        // not the account's own.
         return http.Response(
           jsonEncode({
             'localId': 'uid-1',
             'idToken': 'fb-token-3',
             'refreshToken': 'refresh-3',
             'expiresIn': '3600',
+            'displayName': 'Dana (school)',
+            'email': 'dana@school.edu',
           }),
           200,
         );
       }));
       final user = await session.linkGoogleIdToken('second-google');
       expect(user.uid, 'uid-1');
-      // The link response describes the credential, not the account, so the
-      // account's own name and email survive it.
+      // Linking gains a way to sign in; it does not replace who you are.
       expect(user.displayName, 'Dana');
       expect(user.email, 'dana@example.com');
+      expect(session.currentUser?.email, 'dana@example.com');
       expect(await session.getIdToken(), 'fb-token-3');
     });
 

@@ -7,6 +7,9 @@
   over from the current user rather than cleared.
 - `FirebaseAuthSession.linkWithIdp` and `linkGoogleIdToken`: link a second
   provider credential to the signed-in account, so both sign in to one uid.
+  The account keeps its own profile: the response carries the linked
+  provider's name and email, and adopting those would swap the signed-in
+  identity for the one just attached to it.
 - `FirebaseAuthSession.unlinkProvider` and `linkedProviders`, with the new
   `LinkedProvider` type.
 - `FirestoreValueCodec` and `Document.fromJson` are now tested against a
