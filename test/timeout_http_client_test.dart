@@ -37,4 +37,24 @@ void main() {
       expect(client.timeout, const Duration(seconds: 1));
     });
   });
+
+  test('a response whose body never arrives times out', () async {
+    final client = TimeoutHttpClient(
+      inner: _StalledBodyClient(),
+      timeout: const Duration(milliseconds: 50),
+    );
+    await expectLater(
+      client.get(Uri.parse('https://example.com')),
+      throwsA(isA<TimeoutException>()),
+    );
+  });
+}
+
+/// Headers arrive, then the body stalls forever: the case the response-stream
+/// deadline covers, distinct from a connection that never answers at all.
+class _StalledBodyClient extends http.BaseClient {
+  @override
+  Future<http.StreamedResponse> send(http.BaseRequest request) async {
+    return http.StreamedResponse(StreamController<List<int>>().stream, 200);
+  }
 }

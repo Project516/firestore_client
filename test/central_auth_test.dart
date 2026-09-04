@@ -410,4 +410,33 @@ void main() {
       expect(outcome, CentralRecheckOutcome.deferred);
     });
   });
+
+  group('CentralRestAuthClient origin validation', () {
+    test('rejects a base URL that is not https', () {
+      expect(
+        () => CentralRestAuthClient(
+          centralApiKey: 'key',
+          centralFunctionsBaseUrl: 'http://evil.example.com',
+        ),
+        throwsArgumentError,
+      );
+    });
+
+    test('allows loopback so a test can point at a stub', () {
+      expect(
+        () => CentralRestAuthClient(
+          centralApiKey: 'key',
+          centralFunctionsBaseUrl: 'http://localhost:8080',
+        ),
+        returnsNormally,
+      );
+    });
+
+    test('allows the real https endpoint', () {
+      expect(
+        () => CentralRestAuthClient(centralApiKey: 'key'),
+        returnsNormally,
+      );
+    });
+  });
 }

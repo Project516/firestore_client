@@ -139,10 +139,39 @@ class CentralRestAuthClient {
     this.centralFunctionsBaseUrl = defaultCentralFunctionsBaseUrl,
     http.Client? httpClient,
     Duration? customTokenTimeout,
-  })  : _http = httpClient ?? TimeoutHttpClient(),
-        _ownsHttp = httpClient == null,
-        _customTokenTimeout = customTokenTimeout ?? _defaultCustomTokenTimeout {
+  })  : _customTokenTimeout = customTokenTimeout ?? _defaultCustomTokenTimeout,
+        _http = httpClient ??
+            // The transport deadline has to cover the callable's own, or a
+            // cold start dies in the socket before getCustomToken's timeout
+            // is ever reached and the failure reads as unreachable rather
+            // than slow.
+            TimeoutHttpClient(
+              timeout: customTokenTimeout ?? _defaultCustomTokenTimeout,
+            ),
+        _ownsHttp = httpClient == null {
+    _assertCredentialedOrigin(centralFunctionsBaseUrl);
     _session = FirebaseAuthSession(apiKey: centralApiKey, httpClient: _http);
+  }
+
+  /// Every call to [centralFunctionsBaseUrl] carries the central session's
+  /// bearer token, so a base URL that is not HTTPS would put that token on
+  /// the wire in clear, and one pointing somewhere unexpected would hand it
+  /// to whoever answers. The default is correct; this guards a caller that
+  /// overrides it. Loopback is allowed so a test can point at a local stub.
+  static void _assertCredentialedOrigin(String baseUrl) {
+    final uri = Uri.tryParse(baseUrl);
+    final host = uri?.host ?? '';
+    final loopback =
+        host == 'localhost' || host == '127.0.0.1' || host == '::1';
+    if (uri == null ||
+        !uri.hasAuthority ||
+        (uri.scheme != 'https' && !loopback)) {
+      throw ArgumentError.value(
+        baseUrl,
+        'centralFunctionsBaseUrl',
+        'must be an https URL (or loopback for tests); it carries a bearer token',
+      );
+    }
   }
 
   /// The central project's callable endpoint.
