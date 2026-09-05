@@ -44,6 +44,23 @@ small, dependency-light client:
 - **`FirestoreValueCodec`** -- lossless conversion between plain Dart values
   and Firestore's REST `Value` JSON (null, bool, int, double, String,
   DateTime, bytes, GeoPoint, document references, lists, maps).
+- **`CentralRestAuthClient`** -- the REST handshake for the central Spectrum
+  App Platform pattern: exchange a Google ID token for a session on a
+  central Firebase project, then call its `getCustomToken` callable to mint
+  a custom token scoped to the calling app. For any platform that cannot use
+  `cloud_functions` (desktop, or a mobile app with no native FlutterFire app
+  registered on the central project). `classifyCentralAuthError` maps the
+  callable's status to `CentralAuthErrorKind` (`notApproved`,
+  `appNotRegistered`, `unknown`) so a caller can tell "this member is not
+  approved" apart from "the server was unreachable" -- the difference
+  between working offline and being signed out. `runCentralApprovalRecheck`
+  re-verifies a persisted central session against a caller-supplied
+  `CentralSessionStorage` and `onApproved`/`onDenied` callbacks; the re-check
+  cadence and denial threshold are the caller's own policy.
+- **`TimeoutHttpClient`** -- wraps an `http.Client` with a deadline on both
+  the response headers and each gap in the body stream, so a black-holed
+  connection times out instead of hanging forever. `CentralRestAuthClient`
+  uses it by default.
 
 ## What it does not do (yet)
 
@@ -94,6 +111,55 @@ Future<void> main() async {
 In a Flutter app, pass `launchUrl` from `url_launcher` as the `launcher` and
 store `session.toJson()` (for example with `shared_preferences`) to restore
 the session on the next launch with `session.restore(...)`.
+
+### Central Spectrum App Platform handshake
+
+```dart
+final client = CentralRestAuthClient(centralApiKey: '<central-web-api-key>');
+await client.signInWithGoogleIdToken(googleTokens.idToken);
+try {
+  final handshake = await client.handshake('<your-app-key>');
+  // Exchange handshake.customToken on your own app's FirebaseAuth
+  // (signInWithCustomToken), and store client.toJson() for the daily
+  // re-check below.
+} on CentralAuthException catch (error) {
+  switch (error.kind) {
+    case CentralAuthErrorKind.notApproved:
+      // Show "not approved yet".
+      break;
+    case CentralAuthErrorKind.appNotRegistered:
+      // Show "app not registered" -- an app-side problem, not the user's.
+      break;
+    case CentralAuthErrorKind.unknown:
+      // Network, cold start, or a central-side problem; let the member
+      // keep working and retry later.
+      break;
+  }
+}
+```
+
+`runCentralApprovalRecheck` re-verifies a persisted session, for example once
+a day at launch:
+
+```dart
+final outcome = await runCentralApprovalRecheck(
+  client: client,
+  storage: myCentralSessionStorage, // implements CentralSessionStorage
+  appKey: '<your-app-key>',
+  denialsBeforeSignOut: 2,
+  onApproved: () async { /* record the check time, clear any denial count */ },
+  onDenied: () async { /* increment and return a running denial count */ },
+);
+switch (outcome) {
+  case CentralRecheckOutcome.deniedFinal:
+    // End the session.
+    break;
+  default:
+    // Everything else keeps the session alive; see CentralRecheckOutcome's
+    // doc comments for what each one means.
+    break;
+}
+```
 
 ## Security notes
 

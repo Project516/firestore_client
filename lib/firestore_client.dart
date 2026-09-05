@@ -3,8 +3,10 @@
 /// for plain Dart programs.
 library;
 
+export 'src/auth/central_auth.dart';
 export 'src/auth/firebase_auth_session.dart';
 export 'src/auth/google_desktop_oauth.dart';
+export 'src/http/timeout_http_client.dart';
 export 'src/firestore/cache.dart';
 export 'src/firestore/file_cache.dart';
 export 'src/firestore/firestore.dart';

@@ -1,5 +1,30 @@
 # Changelog
 
+## 0.4.0
+
+- `CentralRestAuthClient`, the REST implementation of the central Spectrum
+  App Platform handshake (Google ID token -> central session ->
+  `getCustomToken`) for any platform that cannot use `cloud_functions`. Moved
+  out of a Flutter app so two apps stop writing the same handshake twice.
+- `CentralAuthErrorKind` and `classifyCentralAuthError`, so every caller
+  agrees on what counts as "not approved" versus "unreachable" -- the
+  difference between a member working fine offline and being signed out.
+  Takes either spelling of the central callable's status
+  (`PERMISSION_DENIED` from the REST error, `permission-denied` from a
+  FlutterFire `FirebaseFunctionsException.code`), so a FlutterFire caller can
+  reuse it without this package depending on `cloud_functions`.
+- `CentralHandshake`, `CentralProfile`, `CentralAuthException`.
+- `runCentralApprovalRecheck` and `CentralRecheckOutcome`: the daily
+  approval re-check mechanism against a persisted central session. Takes a
+  `CentralSessionStorage` (read/write/delete one string) and plain
+  `onApproved`/`onDenied` callbacks instead of `SharedPreferences`, so the
+  re-check cadence and denial threshold stay app policy while the network
+  call and its classification live in one place.
+- `TimeoutHttpClient`: bounds an `http.Client` with a deadline on both the
+  response headers and each gap in the body stream, so a black-holed
+  connection fails instead of hanging forever. `CentralRestAuthClient`
+  defaults to it; a bare `http.Client()` has no such bound.
+
 ## 0.3.0
 
 - `FirebaseAuthSession.updateDisplayName`, so an account can be renamed
