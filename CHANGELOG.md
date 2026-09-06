@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.5.0
+
+- `centralProjectId` and `defaultCentralFunctionsBaseUrl` are build-time
+  defines (`SPECTRUM_CENTRAL_PROJECT_ID`,
+  `SPECTRUM_CENTRAL_FUNCTIONS_BASE_URL`) instead of hard-coded constants, both
+  defaulting to the values they held in 0.4.1. A build that passes no defines
+  is unchanged. Another team running a Spectrum app against their own central
+  platform now overrides them at build time rather than forking this package.
+  An overridden base URL still has to be https, which `CentralRestAuthClient`
+  enforces as of 0.4.1.
+
 ## 0.4.1
 
 Hardening for `CentralRestAuthClient` and `runCentralApprovalRecheck`, found

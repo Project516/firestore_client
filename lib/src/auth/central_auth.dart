@@ -114,15 +114,37 @@ String _kindName(CentralAuthErrorKind kind) {
 }
 
 /// The central project every Spectrum app authenticates against.
-const String centralProjectId = 'spectrumtasks-81c63';
+///
+/// Spectrum's own project is the default, so a build that passes no defines
+/// behaves exactly as it did before this was configurable. Another team
+/// running these apps against their own platform overrides it at build time:
+///
+/// ```
+/// flutter build apk --dart-define=SPECTRUM_CENTRAL_PROJECT_ID=yourteam-central
+/// ```
+///
+/// It is a define rather than a constant so self-hosting is a build flag
+/// instead of a fork of this package.
+const String centralProjectId = String.fromEnvironment(
+  'SPECTRUM_CENTRAL_PROJECT_ID',
+  defaultValue: 'spectrumtasks-81c63',
+);
 
 /// The callable on the central project that mints per-app custom tokens.
 const String customTokenCallable = 'getCustomToken';
 
-/// The central project's callable endpoint. Region default for v1 onCall
-/// functions, the same endpoint the web SDK resolves.
-const String defaultCentralFunctionsBaseUrl =
-    'https://us-central1-$centralProjectId.cloudfunctions.net';
+/// The central project's callable endpoint. Defaults to the region v1 onCall
+/// functions use, which is the endpoint the web SDK resolves for
+/// [centralProjectId].
+///
+/// Override it with `--dart-define=SPECTRUM_CENTRAL_FUNCTIONS_BASE_URL=...`
+/// for a function deployed outside `us-central1` or behind a custom domain.
+/// [CentralRestAuthClient] still requires https of whatever it is given, since
+/// that URL carries a bearer token.
+const String defaultCentralFunctionsBaseUrl = String.fromEnvironment(
+  'SPECTRUM_CENTRAL_FUNCTIONS_BASE_URL',
+  defaultValue: 'https://us-central1-$centralProjectId.cloudfunctions.net',
+);
 
 /// The REST implementation of the central Spectrum App Platform handshake --
 /// Google ID token -> central session -> `getCustomToken` -- for any
