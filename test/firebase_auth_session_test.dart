@@ -9,6 +9,73 @@ import 'package:firestore_client/firestore_client.dart';
 
 void main() {
   group('FirebaseAuthSession', () {
+    test(
+        'close() closes an internally created client even if '
+        'ownsHttpClient: false is passed by mistake', () async {
+      final session = FirebaseAuthSession(
+        apiKey: 'key',
+        ownsHttpClient: false,
+      );
+
+      session.close();
+
+      await expectLater(
+        session.signInWithGoogleIdToken('google-token'),
+        throwsA(anything),
+      );
+    });
+
+    test(
+        'disables redirect-following on signInWithIdp, even with an '
+        'injected client', () async {
+      http.BaseRequest? seen;
+      final session = FirebaseAuthSession(
+        apiKey: 'key',
+        httpClient: MockClient((request) async {
+          seen = request;
+          return http.Response(
+            jsonEncode({
+              'localId': 'uid-1',
+              'idToken': 'fb-token',
+              'refreshToken': 'refresh-1',
+              'expiresIn': '3600',
+            }),
+            200,
+          );
+        }),
+      );
+
+      await session.signInWithGoogleIdToken('google-token');
+
+      expect(seen!.followRedirects, isFalse);
+    });
+
+    test(
+        'disables redirect-following on the refresh-token POST, even with '
+        'an injected client', () async {
+      http.BaseRequest? seen;
+      final session = FirebaseAuthSession(
+        apiKey: 'key',
+        httpClient: MockClient((request) async {
+          if (request.url.host == 'securetoken.googleapis.com') {
+            seen = request;
+          }
+          return http.Response(
+            jsonEncode({
+              'id_token': 'fb-token',
+              'refresh_token': 'refresh-2',
+              'expires_in': '3600',
+            }),
+            200,
+          );
+        }),
+      );
+
+      await session.restore({'uid': 'uid-1', 'refreshToken': 'refresh-1'});
+
+      expect(seen!.followRedirects, isFalse);
+    });
+
     test('signInWithGoogleIdToken adopts the user and token', () async {
       final session = FirebaseAuthSession(
         apiKey: 'key',
@@ -140,6 +207,15 @@ void main() {
       );
       expect(
         await session.restore({'uid': 'u', 'refreshToken': 'dead'}),
+        isNull,
+      );
+    });
+
+    test('restore returns null, not a TypeError, for a wrong-typed field',
+        () async {
+      final session = FirebaseAuthSession(apiKey: 'key');
+      expect(
+        await session.restore({'uid': 12345, 'refreshToken': 'r'}),
         isNull,
       );
     });

@@ -38,6 +38,38 @@ void main() {
     });
   });
 
+  test('disables redirect-following so Authorization is never forwarded',
+      () async {
+    http.BaseRequest? seen;
+    final client = TimeoutHttpClient(
+      inner: _RecordingClient((request) => seen = request),
+      timeout: const Duration(seconds: 1),
+    );
+
+    await client.post(
+      Uri.parse('https://example.com'),
+      headers: {'Authorization': 'Bearer secret'},
+    );
+
+    expect(seen!.followRedirects, isFalse);
+  });
+
+  test('disables redirect-following on a MultipartRequest too', () async {
+    http.BaseRequest? seen;
+    final client = TimeoutHttpClient(
+      inner: _RecordingClient((request) => seen = request),
+      timeout: const Duration(seconds: 1),
+    );
+
+    final request = http.MultipartRequest(
+      'POST',
+      Uri.parse('https://example.com'),
+    )..headers['Authorization'] = 'Bearer secret';
+    await client.send(request);
+
+    expect(seen!.followRedirects, isFalse);
+  });
+
   test('a response whose body never arrives times out', () async {
     final client = TimeoutHttpClient(
       inner: _StalledBodyClient(),
@@ -48,6 +80,19 @@ void main() {
       throwsA(isA<TimeoutException>()),
     );
   });
+}
+
+/// Records the request it was handed and returns an empty 200.
+class _RecordingClient extends http.BaseClient {
+  _RecordingClient(this.onRequest);
+
+  final void Function(http.BaseRequest request) onRequest;
+
+  @override
+  Future<http.StreamedResponse> send(http.BaseRequest request) async {
+    onRequest(request);
+    return http.StreamedResponse(Stream.value(<int>[]), 200);
+  }
 }
 
 /// Headers arrive, then the body stalls forever: the case the response-stream

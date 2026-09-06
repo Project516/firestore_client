@@ -58,13 +58,16 @@ class FirebaseAuthSession {
     required this.apiKey,
     http.Client? httpClient,
     DateTime Function()? clock,
+    bool? ownsHttpClient,
   })  : _http = httpClient ?? http.Client(),
+        _ownsHttp = httpClient == null ? true : (ownsHttpClient ?? false),
         _clock = clock ?? DateTime.now;
 
   /// The Firebase project's Web API key.
   final String apiKey;
 
   final http.Client _http;
+  final bool _ownsHttp;
   final DateTime Function() _clock;
 
   final StreamController<FirebaseUser?> _authState =
@@ -217,10 +220,10 @@ class FirebaseAuthSession {
   Future<String?> _refresh() async {
     final refreshToken = _refreshToken;
     if (refreshToken == null) return _idToken;
-    final response = await _http.post(
+    final response = await _postNoRedirect(
       Uri.parse('$_secureToken?key=$apiKey'),
       headers: const {'Content-Type': 'application/x-www-form-urlencoded'},
-      body: {
+      bodyFields: {
         'grant_type': 'refresh_token',
         'refresh_token': refreshToken,
       },
@@ -260,8 +263,12 @@ class FirebaseAuthSession {
   /// Returns the user, or null when the stored refresh token is no longer
   /// valid.
   Future<FirebaseUser?> restore(Map<String, dynamic> json) async {
-    final uid = json['uid'] as String?;
-    final refreshToken = json['refreshToken'] as String?;
+    // A field of the wrong type (not just a missing one) means the same
+    // thing here: nothing usable was persisted. `as String?` would throw
+    // instead, and a caller passing in whatever it read off disk should
+    // never have to catch a TypeError to find that out.
+    final uid = _stringOrNull(json['uid']);
+    final refreshToken = _stringOrNull(json['refreshToken']);
     if (uid == null || refreshToken == null) return null;
     _refreshToken = refreshToken;
     _idToken = 'expired';
@@ -281,9 +288,9 @@ class FirebaseAuthSession {
     }
     _user = FirebaseUser(
       uid: uid,
-      displayName: (json['displayName'] as String?) ?? '',
-      email: json['email'] as String?,
-      photoUrl: json['photoUrl'] as String?,
+      displayName: _stringOrNull(json['displayName']) ?? '',
+      email: _stringOrNull(json['email']),
+      photoUrl: _stringOrNull(json['photoUrl']),
     );
     if (!_authState.isClosed) _authState.add(_user);
     return _user;
@@ -293,7 +300,7 @@ class FirebaseAuthSession {
     String url,
     Map<String, dynamic> body,
   ) async {
-    final response = await _http.post(
+    final response = await _postNoRedirect(
       Uri.parse('$url?key=$apiKey'),
       headers: const {'Content-Type': 'application/json'},
       body: jsonEncode(body),
@@ -310,6 +317,33 @@ class FirebaseAuthSession {
     }
     return jsonDecode(response.body) as Map<String, dynamic>;
   }
+
+  /// Every request here carries the Google ID token, the Firebase ID token,
+  /// or the refresh token in its body, so none of them can be allowed to
+  /// auto-follow a redirect: package:http's IO transport forwards a POST
+  /// body (and, for a same-host/subdomain target, sensitive headers) to
+  /// wherever a 3xx points. This only helps when [_http] is not already a
+  /// redirect-safe client of its own -- both apps that use this package
+  /// inject their own httpClient, so this can't be left to the caller.
+  Future<http.Response> _postNoRedirect(
+    Uri uri, {
+    required Map<String, String> headers,
+    String? body,
+    Map<String, String>? bodyFields,
+  }) async {
+    final request = http.Request('POST', uri)
+      ..followRedirects = false
+      ..headers.addAll(headers);
+    if (body != null) {
+      request.body = body;
+    } else if (bodyFields != null) {
+      request.bodyFields = bodyFields;
+    }
+    final streamed = await _http.send(request);
+    return http.Response.fromStream(streamed);
+  }
+
+  String? _stringOrNull(Object? value) => value is String ? value : null;
 
   FirebaseUser _adopt(Map<String, dynamic> data) {
     final uid = data['localId'] as String?;
@@ -380,6 +414,6 @@ class FirebaseAuthSession {
 
   void close() {
     _authState.close();
-    _http.close();
+    if (_ownsHttp) _http.close();
   }
 }

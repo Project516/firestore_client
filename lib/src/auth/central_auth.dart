@@ -149,29 +149,48 @@ class CentralRestAuthClient {
               timeout: customTokenTimeout ?? _defaultCustomTokenTimeout,
             ),
         _ownsHttp = httpClient == null {
-    _assertCredentialedOrigin(centralFunctionsBaseUrl);
-    _session = FirebaseAuthSession(apiKey: centralApiKey, httpClient: _http);
+    final baseUri = _assertCredentialedOrigin(centralFunctionsBaseUrl);
+    _customTokenUri = Uri(
+      scheme: baseUri.scheme,
+      userInfo: baseUri.userInfo,
+      host: baseUri.host,
+      port: baseUri.port,
+      pathSegments: [
+        ...baseUri.pathSegments.where((segment) => segment.isNotEmpty),
+        customTokenCallable,
+      ],
+    );
+    _session = FirebaseAuthSession(
+      apiKey: centralApiKey,
+      httpClient: _http,
+      ownsHttpClient: _ownsHttp,
+    );
   }
 
   /// Every call to [centralFunctionsBaseUrl] carries the central session's
   /// bearer token, so a base URL that is not HTTPS would put that token on
   /// the wire in clear, and one pointing somewhere unexpected would hand it
   /// to whoever answers. The default is correct; this guards a caller that
-  /// overrides it. Loopback is allowed so a test can point at a local stub.
-  static void _assertCredentialedOrigin(String baseUrl) {
+  /// overrides it. A query or fragment on the base URL is also rejected: it
+  /// would otherwise end up appended after (or swallowing) the callable path
+  /// below instead of the callable ever being reached. Tests point a
+  /// [httpClient] at a fake instead of relaxing this.
+  static Uri _assertCredentialedOrigin(String baseUrl) {
     final uri = Uri.tryParse(baseUrl);
-    final host = uri?.host ?? '';
-    final loopback =
-        host == 'localhost' || host == '127.0.0.1' || host == '::1';
     if (uri == null ||
         !uri.hasAuthority ||
-        (uri.scheme != 'https' && !loopback)) {
+        uri.host.isEmpty ||
+        uri.scheme != 'https' ||
+        uri.query.isNotEmpty ||
+        uri.fragment.isNotEmpty) {
       throw ArgumentError.value(
         baseUrl,
         'centralFunctionsBaseUrl',
-        'must be an https URL (or loopback for tests); it carries a bearer token',
+        'must be an https URL with no query or fragment; it carries a '
+            'bearer token',
       );
     }
+    return uri;
   }
 
   /// The central project's callable endpoint.
@@ -184,6 +203,11 @@ class CentralRestAuthClient {
   final bool _ownsHttp;
   final Duration _customTokenTimeout;
   late final FirebaseAuthSession _session;
+
+  /// [centralFunctionsBaseUrl] with [customTokenCallable] appended as a
+  /// normalized path segment, computed once so a trailing slash on the base
+  /// URL cannot produce a doubled or empty path segment.
+  late final Uri _customTokenUri;
 
   /// Step 2 of the handshake: exchanges a Google ID token for a session on
   /// the central project, whose roster owns approval.
@@ -226,22 +250,38 @@ class CentralRestAuthClient {
     String bearerToken,
     String targetApp,
   ) async {
+    // Built as a Request with followRedirects disabled explicitly, rather
+    // than through the client's post() convenience: an injected httpClient
+    // (both apps that use this package supply their own) bypasses this
+    // package's TimeoutHttpClient entirely, so its redirect-following would
+    // otherwise be whatever that client defaults to, and this request always
+    // carries the bearer token.
+    final request = http.Request('POST', _customTokenUri)
+      ..followRedirects = false
+      ..headers.addAll({
+        'Content-Type': 'application/json',
+        'Authorization': 'Bearer $bearerToken',
+      })
+      ..body = jsonEncode({
+        'data': {'targetApp': targetApp},
+      });
     final response = await _http
-        .post(
-          Uri.parse('$centralFunctionsBaseUrl/$customTokenCallable'),
-          headers: {
-            'Content-Type': 'application/json',
-            'Authorization': 'Bearer $bearerToken',
-          },
-          body: jsonEncode({
-            'data': {'targetApp': targetApp},
-          }),
-        )
+        .send(request)
+        .then(http.Response.fromStream)
         .timeout(_customTokenTimeout);
     final Map<String, dynamic> body;
     try {
       body = (jsonDecode(response.body) as Map).cast<String, dynamic>();
     } catch (_) {
+      // A malformed 200 (a proxy returning a generic success page, for
+      // example) is a central auth failure, not the plain transport error
+      // FirebaseAuthException means for the non-200 codes below.
+      if (response.statusCode == 200) {
+        throw const CentralAuthException(
+          CentralAuthErrorKind.unknown,
+          'Malformed response from $customTokenCallable.',
+        );
+      }
       throw FirebaseAuthException(response.statusCode, response.body);
     }
     if (response.statusCode != 200) {
@@ -261,21 +301,29 @@ class CentralRestAuthClient {
         (error?['message'] as String?) ?? response.body,
       );
     }
-    final result = (body['result'] as Map).cast<String, dynamic>();
-    return CentralHandshake(
-      customToken: result['customToken'] as String,
-      profile: result['profile'] is Map
-          ? CentralProfile.fromMap(
-              (result['profile'] as Map).cast<String, dynamic>(),
-            )
-          : null,
-    );
+    try {
+      final result = (body['result'] as Map).cast<String, dynamic>();
+      return CentralHandshake(
+        customToken: result['customToken'] as String,
+        profile: result['profile'] is Map
+            ? CentralProfile.fromMap(
+                (result['profile'] as Map).cast<String, dynamic>(),
+              )
+            : null,
+      );
+    } catch (_) {
+      // A 200 with a shape the callable never actually sends (a proxy
+      // returning a generic success page, for example) is still a central
+      // auth failure, not a crash a caller's CentralAuthException catch
+      // clause never sees.
+      throw CentralAuthException(
+        CentralAuthErrorKind.unknown,
+        'Malformed response from $customTokenCallable.',
+      );
+    }
   }
 
-  void close() {
-    _session.close();
-    if (_ownsHttp) _http.close();
-  }
+  void close() => _session.close();
 }
 
 /// Minimal storage a caller supplies for the persisted central session
@@ -319,9 +367,8 @@ enum CentralRecheckOutcome {
   /// session.
   deniedFinal,
 
-  /// Anything else -- network, cold start, central misconfiguration, a
-  /// malformed stored payload. The caller keeps the session alive and
-  /// retries later.
+  /// Anything else -- network, cold start, central misconfiguration. The
+  /// caller keeps the session alive and retries later.
   deferred,
 }
 
@@ -351,19 +398,37 @@ Future<CentralRecheckOutcome> runCentralApprovalRecheck({
 }) async {
   final stored = await storage.read();
   if (stored == null) return CentralRecheckOutcome.noStoredSession;
+
+  final Map<String, dynamic> payload;
   try {
-    final payload = (jsonDecode(stored) as Map).cast<String, dynamic>();
-    if (await client.restore(payload) == null) {
+    payload = (jsonDecode(stored) as Map).cast<String, dynamic>();
+  } catch (_) {
+    // A malformed local blob is not a signal from central at all -- there is
+    // nothing to retry against, so clear it rather than repeating the same
+    // decode failure on every future recheck.
+    await storage.delete();
+    return CentralRecheckOutcome.sessionRevoked;
+  }
+
+  try {
+    final user = await client.restore(payload);
+    if (user == null) {
       await storage.delete();
       return CentralRecheckOutcome.sessionRevoked;
     }
+  } catch (_) {
+    // The decoded JSON has the wrong shape for a session (a field of the
+    // wrong type), which restore() only discovers by throwing. Same verdict
+    // as a decode failure: nothing here to retry against.
+    await storage.delete();
+    return CentralRecheckOutcome.sessionRevoked;
+  }
+
+  try {
     final idToken = await client.getIdToken();
     if (idToken == null) return CentralRecheckOutcome.tokenUnavailable;
     await client.getCustomToken(idToken, appKey);
     await onApproved();
-    // The refresh may have rotated the central refresh token.
-    await storage.write(jsonEncode(client.toJson()));
-    return CentralRecheckOutcome.approved;
   } on CentralAuthException catch (error) {
     if (error.kind != CentralAuthErrorKind.notApproved) {
       return CentralRecheckOutcome.deferred;
@@ -373,9 +438,14 @@ Future<CentralRecheckOutcome> runCentralApprovalRecheck({
         ? CentralRecheckOutcome.deniedPending
         : CentralRecheckOutcome.deniedFinal;
   } catch (_) {
-    // A malformed stored payload lands here too (the jsonDecode/cast above is
-    // inside this try): keep the session alive and retry later rather than
-    // treating a bad local blob as a denial.
     return CentralRecheckOutcome.deferred;
   }
+
+  // The callable already confirmed approval and onApproved's side effects
+  // already ran; a failure here is the caller's storage failing, not an
+  // inconclusive recheck, so it is not swallowed into `deferred` -- the
+  // refresh may have rotated the central refresh token and this is the only
+  // chance to persist it.
+  await storage.write(jsonEncode(client.toJson()));
+  return CentralRecheckOutcome.approved;
 }
