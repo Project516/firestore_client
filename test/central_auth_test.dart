@@ -581,4 +581,30 @@ void main() {
       );
     });
   });
+
+  group('central platform configuration', () {
+    // These are build-time defines so another team can self-host without
+    // forking this package. A build that passes no defines has to keep
+    // resolving to Spectrum's platform, or every app pinning this breaks.
+    test('defaults to Spectrum\'s central project', () {
+      expect(centralProjectId, 'spectrumtasks-81c63');
+    });
+
+    test('derives the callable endpoint from the project id', () {
+      expect(
+        defaultCentralFunctionsBaseUrl,
+        'https://us-central1-$centralProjectId.cloudfunctions.net',
+      );
+    });
+
+    test('the default endpoint satisfies the https origin check', () {
+      expect(
+        () => CentralRestAuthClient(
+          centralApiKey: 'key',
+          centralFunctionsBaseUrl: defaultCentralFunctionsBaseUrl,
+        ),
+        returnsNormally,
+      );
+    });
+  });
 }
