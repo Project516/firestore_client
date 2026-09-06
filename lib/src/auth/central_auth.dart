@@ -249,22 +249,38 @@ class CentralRestAuthClient {
     String bearerToken,
     String targetApp,
   ) async {
+    // Built as a Request with followRedirects disabled explicitly, rather
+    // than through the client's post() convenience: an injected httpClient
+    // (both apps that use this package supply their own) bypasses this
+    // package's TimeoutHttpClient entirely, so its redirect-following would
+    // otherwise be whatever that client defaults to, and this request always
+    // carries the bearer token.
+    final request = http.Request('POST', _customTokenUri)
+      ..followRedirects = false
+      ..headers.addAll({
+        'Content-Type': 'application/json',
+        'Authorization': 'Bearer $bearerToken',
+      })
+      ..body = jsonEncode({
+        'data': {'targetApp': targetApp},
+      });
     final response = await _http
-        .post(
-          _customTokenUri,
-          headers: {
-            'Content-Type': 'application/json',
-            'Authorization': 'Bearer $bearerToken',
-          },
-          body: jsonEncode({
-            'data': {'targetApp': targetApp},
-          }),
-        )
+        .send(request)
+        .then(http.Response.fromStream)
         .timeout(_customTokenTimeout);
     final Map<String, dynamic> body;
     try {
       body = (jsonDecode(response.body) as Map).cast<String, dynamic>();
     } catch (_) {
+      // A malformed 200 (a proxy returning a generic success page, for
+      // example) is a central auth failure, not the plain transport error
+      // FirebaseAuthException means for the non-200 codes below.
+      if (response.statusCode == 200) {
+        throw const CentralAuthException(
+          CentralAuthErrorKind.unknown,
+          'Malformed response from $customTokenCallable.',
+        );
+      }
       throw FirebaseAuthException(response.statusCode, response.body);
     }
     if (response.statusCode != 200) {

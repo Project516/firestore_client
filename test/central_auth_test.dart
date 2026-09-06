@@ -241,6 +241,44 @@ void main() {
       );
     });
 
+    test(
+        'a 200 that is not valid JSON throws CentralAuthException, not '
+        'FirebaseAuthException', () async {
+      final client = CentralRestAuthClient(
+        centralApiKey: 'key',
+        httpClient:
+            MockClient((request) async => http.Response('not json{', 200)),
+      );
+      addTearDown(client.close);
+
+      await expectLater(
+        client.getCustomToken('bearer', 'spectrumstrategy'),
+        throwsA(isA<CentralAuthException>()),
+      );
+    });
+
+    test('disables redirect-following even with an injected httpClient',
+        () async {
+      http.BaseRequest? seen;
+      final client = CentralRestAuthClient(
+        centralApiKey: 'key',
+        httpClient: MockClient((request) async {
+          seen = request;
+          return http.Response(
+            jsonEncode({
+              'result': {'customToken': 'custom-token-1'},
+            }),
+            200,
+          );
+        }),
+      );
+      addTearDown(client.close);
+
+      await client.getCustomToken('bearer', 'spectrumstrategy');
+
+      expect(seen!.followRedirects, isFalse);
+    });
+
     test('close() does not close a caller-supplied httpClient', () async {
       final shared = MockClient((request) async => http.Response('{}', 200));
       final client = CentralRestAuthClient(
