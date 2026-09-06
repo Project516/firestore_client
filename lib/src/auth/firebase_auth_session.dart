@@ -58,13 +58,16 @@ class FirebaseAuthSession {
     required this.apiKey,
     http.Client? httpClient,
     DateTime Function()? clock,
+    bool? ownsHttpClient,
   })  : _http = httpClient ?? http.Client(),
+        _ownsHttp = ownsHttpClient ?? httpClient == null,
         _clock = clock ?? DateTime.now;
 
   /// The Firebase project's Web API key.
   final String apiKey;
 
   final http.Client _http;
+  final bool _ownsHttp;
   final DateTime Function() _clock;
 
   final StreamController<FirebaseUser?> _authState =
@@ -380,6 +383,6 @@ class FirebaseAuthSession {
 
   void close() {
     _authState.close();
-    _http.close();
+    if (_ownsHttp) _http.close();
   }
 }

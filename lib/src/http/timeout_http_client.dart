@@ -22,6 +22,13 @@ class TimeoutHttpClient extends http.BaseClient {
 
   @override
   Future<http.StreamedResponse> send(http.BaseRequest request) async {
+    // A request that carries an Authorization header (every call this
+    // package makes) must not auto-follow a redirect: package:http's IO
+    // transport forwards Authorization to a same-host or subdomain target,
+    // which would hand a bearer token to wherever that redirect points.
+    if (request is http.Request) {
+      request.followRedirects = false;
+    }
     final response = await _inner.send(request).timeout(timeout);
     final boundedBody = response.stream.timeout(
       timeout,

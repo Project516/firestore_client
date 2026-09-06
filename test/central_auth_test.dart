@@ -225,6 +225,35 @@ void main() {
       final client = CentralRestAuthClient(centralApiKey: 'key');
       addTearDown(client.close);
     });
+
+    test(
+        'a 200 with no result shape throws CentralAuthException, not a '
+        'TypeError', () async {
+      final client = CentralRestAuthClient(
+        centralApiKey: 'key',
+        httpClient: MockClient((request) async => http.Response('{}', 200)),
+      );
+      addTearDown(client.close);
+
+      await expectLater(
+        client.getCustomToken('bearer', 'spectrumstrategy'),
+        throwsA(isA<CentralAuthException>()),
+      );
+    });
+
+    test('close() does not close a caller-supplied httpClient', () async {
+      final shared = MockClient((request) async => http.Response('{}', 200));
+      final client = CentralRestAuthClient(
+        centralApiKey: 'key',
+        httpClient: shared,
+      );
+
+      client.close();
+
+      // A closed MockClient still throws on further use; this only has to
+      // not throw here, proving close() left `shared` usable.
+      await shared.get(Uri.parse('https://example.com'));
+    });
   });
 
   group('runCentralApprovalRecheck', () {
@@ -391,7 +420,7 @@ void main() {
       expect(denialCount, 0);
     });
 
-    test('a malformed stored payload defers rather than denies', () async {
+    test('a malformed stored payload is revoked, not deferred', () async {
       storage.value = 'not json{';
       client = CentralRestAuthClient(
         centralApiKey: 'key',
@@ -407,7 +436,8 @@ void main() {
         onDenied: onDenied,
       );
 
-      expect(outcome, CentralRecheckOutcome.deferred);
+      expect(outcome, CentralRecheckOutcome.sessionRevoked);
+      expect(storage.value, isNull);
     });
   });
 
@@ -422,14 +452,55 @@ void main() {
       );
     });
 
-    test('allows loopback so a test can point at a stub', () {
+    test('rejects loopback: tests use a mock client, not http', () {
       expect(
         () => CentralRestAuthClient(
           centralApiKey: 'key',
           centralFunctionsBaseUrl: 'http://localhost:8080',
         ),
-        returnsNormally,
+        throwsArgumentError,
       );
+    });
+
+    test('rejects a base URL with a query or fragment', () {
+      expect(
+        () => CentralRestAuthClient(
+          centralApiKey: 'key',
+          centralFunctionsBaseUrl:
+              'https://us-central1-proj.cloudfunctions.net?x=1',
+        ),
+        throwsArgumentError,
+      );
+      expect(
+        () => CentralRestAuthClient(
+          centralApiKey: 'key',
+          centralFunctionsBaseUrl:
+              'https://us-central1-proj.cloudfunctions.net#frag',
+        ),
+        throwsArgumentError,
+      );
+    });
+
+    test('normalizes a trailing slash on the base URL', () async {
+      Uri? calledUri;
+      final client = CentralRestAuthClient(
+        centralApiKey: 'key',
+        centralFunctionsBaseUrl: 'https://example.com/',
+        httpClient: MockClient((request) async {
+          calledUri = request.url;
+          return http.Response(
+            jsonEncode({
+              'result': {'customToken': 'custom-token-1'},
+            }),
+            200,
+          );
+        }),
+      );
+      addTearDown(client.close);
+
+      await client.getCustomToken('bearer', 'spectrumstrategy');
+
+      expect(calledUri, Uri.parse('https://example.com/getCustomToken'));
     });
 
     test('allows the real https endpoint', () {

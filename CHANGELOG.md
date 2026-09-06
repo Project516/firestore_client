@@ -1,5 +1,35 @@
 # Changelog
 
+## 0.4.1
+
+Hardening for `CentralRestAuthClient` and `runCentralApprovalRecheck`, found
+reviewing an orphaned duplicate of the 0.4.0 work (Project516/firestore_client#14,
+closed as a dead duplicate) against what actually shipped
+(Project516/firestore_client#15):
+
+- The bearer-token origin check no longer allows a loopback `http://` URL.
+  Tests point `httpClient` at a mock instead of relaxing the runtime check,
+  since the token would otherwise ride in clear over any origin matching
+  `localhost`/`127.0.0.1`/`::1`.
+- `getCustomToken`'s request URL is now built from the base URL's parsed path
+  plus the callable name as a normalized path segment, instead of string
+  concatenation, so a trailing slash, query, or fragment on
+  `centralFunctionsBaseUrl` can no longer misdirect the request.
+- `CentralRestAuthClient.close()` no longer closes a caller-supplied
+  `httpClient`. It previously closed it via `FirebaseAuthSession.close()`
+  regardless of who owned it.
+- A 200 response from the callable with an unexpected shape (no `result`
+  key) now throws `CentralAuthException` instead of an uncaught `TypeError`.
+- `runCentralApprovalRecheck` distinguishes a malformed persisted session
+  (deleted, reported as `sessionRevoked`) from a transient failure
+  (`deferred`), and no longer reports a recheck as `deferred` after the
+  callable has already succeeded and `onApproved`'s side effects have
+  already run -- a failure persisting the rotated session now surfaces as a
+  real exception instead of being misreported as inconclusive.
+- `TimeoutHttpClient` no longer follows redirects automatically, so a
+  same-host or subdomain redirect can no longer carry the `Authorization`
+  bearer token to it.
+
 ## 0.4.0
 
 - `CentralRestAuthClient`, the REST implementation of the central Spectrum
