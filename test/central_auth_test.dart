@@ -439,6 +439,29 @@ void main() {
       expect(outcome, CentralRecheckOutcome.sessionRevoked);
       expect(storage.value, isNull);
     });
+
+    test('a stored payload with the wrong field types is revoked too',
+        () async {
+      // Valid JSON, wrong shape: restore() only discovers this by throwing
+      // when it casts 'uid' to a String.
+      storage.value = jsonEncode({'uid': 12345, 'refreshToken': 'r'});
+      client = CentralRestAuthClient(
+        centralApiKey: 'key',
+        httpClient: _centralBackend(),
+      );
+
+      final outcome = await runCentralApprovalRecheck(
+        client: client,
+        storage: storage,
+        appKey: 'spectrumstrategy',
+        denialsBeforeSignOut: 2,
+        onApproved: onApproved,
+        onDenied: onDenied,
+      );
+
+      expect(outcome, CentralRecheckOutcome.sessionRevoked);
+      expect(storage.value, isNull);
+    });
   });
 
   group('CentralRestAuthClient origin validation', () {

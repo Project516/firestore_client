@@ -9,6 +9,22 @@ import 'package:firestore_client/firestore_client.dart';
 
 void main() {
   group('FirebaseAuthSession', () {
+    test(
+        'close() closes an internally created client even if '
+        'ownsHttpClient: false is passed by mistake', () async {
+      final session = FirebaseAuthSession(
+        apiKey: 'key',
+        ownsHttpClient: false,
+      );
+
+      session.close();
+
+      await expectLater(
+        session.signInWithGoogleIdToken('google-token'),
+        throwsA(anything),
+      );
+    });
+
     test('signInWithGoogleIdToken adopts the user and token', () async {
       final session = FirebaseAuthSession(
         apiKey: 'key',

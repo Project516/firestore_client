@@ -395,10 +395,20 @@ Future<CentralRecheckOutcome> runCentralApprovalRecheck({
   }
 
   try {
-    if (await client.restore(payload) == null) {
+    final user = await client.restore(payload);
+    if (user == null) {
       await storage.delete();
       return CentralRecheckOutcome.sessionRevoked;
     }
+  } catch (_) {
+    // The decoded JSON has the wrong shape for a session (a field of the
+    // wrong type), which restore() only discovers by throwing. Same verdict
+    // as a decode failure: nothing here to retry against.
+    await storage.delete();
+    return CentralRecheckOutcome.sessionRevoked;
+  }
+
+  try {
     final idToken = await client.getIdToken();
     if (idToken == null) return CentralRecheckOutcome.tokenUnavailable;
     await client.getCustomToken(idToken, appKey);

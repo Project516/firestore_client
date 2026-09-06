@@ -60,7 +60,7 @@ class FirebaseAuthSession {
     DateTime Function()? clock,
     bool? ownsHttpClient,
   })  : _http = httpClient ?? http.Client(),
-        _ownsHttp = ownsHttpClient ?? httpClient == null,
+        _ownsHttp = httpClient == null ? true : (ownsHttpClient ?? false),
         _clock = clock ?? DateTime.now;
 
   /// The Firebase project's Web API key.

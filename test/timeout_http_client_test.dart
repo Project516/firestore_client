@@ -40,7 +40,7 @@ void main() {
 
   test('disables redirect-following so Authorization is never forwarded',
       () async {
-    http.Request? seen;
+    http.BaseRequest? seen;
     final client = TimeoutHttpClient(
       inner: _RecordingClient((request) => seen = request),
       timeout: const Duration(seconds: 1),
@@ -50,6 +50,22 @@ void main() {
       Uri.parse('https://example.com'),
       headers: {'Authorization': 'Bearer secret'},
     );
+
+    expect(seen!.followRedirects, isFalse);
+  });
+
+  test('disables redirect-following on a MultipartRequest too', () async {
+    http.BaseRequest? seen;
+    final client = TimeoutHttpClient(
+      inner: _RecordingClient((request) => seen = request),
+      timeout: const Duration(seconds: 1),
+    );
+
+    final request = http.MultipartRequest(
+      'POST',
+      Uri.parse('https://example.com'),
+    )..headers['Authorization'] = 'Bearer secret';
+    await client.send(request);
 
     expect(seen!.followRedirects, isFalse);
   });
@@ -70,11 +86,11 @@ void main() {
 class _RecordingClient extends http.BaseClient {
   _RecordingClient(this.onRequest);
 
-  final void Function(http.Request request) onRequest;
+  final void Function(http.BaseRequest request) onRequest;
 
   @override
   Future<http.StreamedResponse> send(http.BaseRequest request) async {
-    onRequest(request as http.Request);
+    onRequest(request);
     return http.StreamedResponse(Stream.value(<int>[]), 200);
   }
 }

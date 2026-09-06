@@ -26,9 +26,9 @@ class TimeoutHttpClient extends http.BaseClient {
     // package makes) must not auto-follow a redirect: package:http's IO
     // transport forwards Authorization to a same-host or subdomain target,
     // which would hand a bearer token to wherever that redirect points.
-    if (request is http.Request) {
-      request.followRedirects = false;
-    }
+    // followRedirects lives on BaseRequest itself, so this covers Request,
+    // StreamedRequest, and MultipartRequest alike.
+    request.followRedirects = false;
     final response = await _inner.send(request).timeout(timeout);
     final boundedBody = response.stream.timeout(
       timeout,
