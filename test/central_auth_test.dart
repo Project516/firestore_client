@@ -542,6 +542,16 @@ void main() {
       );
     });
 
+    test('rejects an https URL with no host', () {
+      expect(
+        () => CentralRestAuthClient(
+          centralApiKey: 'key',
+          centralFunctionsBaseUrl: 'https:///functions',
+        ),
+        throwsArgumentError,
+      );
+    });
+
     test('normalizes a trailing slash on the base URL', () async {
       Uri? calledUri;
       final client = CentralRestAuthClient(

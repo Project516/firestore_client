@@ -179,6 +179,7 @@ class CentralRestAuthClient {
     final uri = Uri.tryParse(baseUrl);
     if (uri == null ||
         !uri.hasAuthority ||
+        uri.host.isEmpty ||
         uri.scheme != 'https' ||
         uri.query.isNotEmpty ||
         uri.fragment.isNotEmpty) {
@@ -366,9 +367,8 @@ enum CentralRecheckOutcome {
   /// session.
   deniedFinal,
 
-  /// Anything else -- network, cold start, central misconfiguration, a
-  /// malformed stored payload. The caller keeps the session alive and
-  /// retries later.
+  /// Anything else -- network, cold start, central misconfiguration. The
+  /// caller keeps the session alive and retries later.
   deferred,
 }
 
