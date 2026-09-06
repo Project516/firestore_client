@@ -28,7 +28,16 @@ closed as a dead duplicate) against what actually shipped
   real exception instead of being misreported as inconclusive.
 - `TimeoutHttpClient` no longer follows redirects automatically, so a
   same-host or subdomain redirect can no longer carry the `Authorization`
-  bearer token to it.
+  bearer token to it. This also covers `getCustomToken`'s own request and
+  every `FirebaseAuthSession` request (sign-in, token refresh, display-name
+  update, provider linking) directly, since both apps that use this package
+  inject their own `httpClient` instead of this package's
+  `TimeoutHttpClient`, so the fix could not rely on that wrapper alone.
+- `FirebaseAuthSession.restore` (and so `CentralRestAuthClient.restore`) now
+  treats a wrong-typed persisted field (a `uid` that decoded to something
+  other than a string, for example) the same as a missing one -- returns
+  null instead of throwing a `TypeError` -- so a caller reading a malformed
+  local blob does not have to catch a `TypeError` to find out.
 
 ## 0.4.0
 
