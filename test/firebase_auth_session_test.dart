@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 
@@ -461,6 +462,55 @@ void main() {
       expect(tokens.idToken, 'google-id');
       expect(tokens.accessToken, 'google-access');
       expect(tokens.refreshToken, 'google-refresh');
+    });
+
+    test('signIn completes when the launcher hits the loopback redirect',
+        () async {
+      final oauth = GoogleDesktopOAuth(
+        clientId: 'client-1',
+        // A real launcher opens the system browser and returns right away;
+        // the loopback server only starts accepting once signIn() moves on
+        // to await it, so this must not block signIn()'s own await on the
+        // redirect actually landing.
+        launcher: (url) {
+          final redirectUri = Uri.parse(url.queryParameters['redirect_uri']!);
+          final state = url.queryParameters['state'];
+          unawaited(() async {
+            final client = HttpClient();
+            final request = await client.getUrl(
+              redirectUri.replace(
+                queryParameters: {'code': 'auth-code-1', 'state': state},
+              ),
+            );
+            await request.close();
+            client.close();
+          }());
+          return Future.value();
+        },
+        httpClient: MockClient(
+          (_) async =>
+              http.Response(jsonEncode({'id_token': 'google-id'}), 200),
+        ),
+      );
+      final tokens = await oauth.signIn().timeout(const Duration(seconds: 5));
+      expect(tokens.idToken, 'google-id');
+    });
+
+    test(
+        'signIn times out instead of hanging when the browser tab is '
+        'closed without completing the flow', () async {
+      // Nothing ever hits the loopback redirect here, the same as a user
+      // closing the tab: without a deadline, signIn() would never settle
+      // (Spectrum3847/SpectrumStrategy#1694).
+      final oauth = GoogleDesktopOAuth(
+        clientId: 'client-1',
+        launcher: (_) async {},
+        httpClient: MockClient((_) async => http.Response('', 200)),
+      );
+      await expectLater(
+        oauth.signIn(timeout: const Duration(milliseconds: 50)),
+        throwsA(isA<StateError>()),
+      );
     });
   });
 }
