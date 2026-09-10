@@ -49,10 +49,15 @@ class GoogleDesktopOAuth {
   final http.Client _http;
 
   /// Runs the interactive sign-in flow. [successHtml] is served to the
-  /// browser tab after the redirect lands.
+  /// browser tab after the redirect lands. [timeout] bounds the wait for
+  /// that redirect: closing the browser tab before finishing sends nothing
+  /// to the loopback server, so without a deadline the returned future
+  /// never settles and the caller is stuck on "signing in" until it
+  /// restarts.
   Future<GoogleTokens> signIn({
     String successHtml = '<html><body style="font-family:sans-serif">'
         '<p>Sign-in complete. You can close this tab.</p></body></html>',
+    Duration timeout = const Duration(minutes: 5),
   }) async {
     final verifier = randomToken(64);
     final state = randomToken(24);
@@ -68,13 +73,21 @@ class GoogleDesktopOAuth {
           ),
         ),
       );
-      final code = await _awaitRedirectCode(server, state, successHtml);
+      final code = await _awaitRedirectCode(server, state, successHtml).timeout(
+        timeout,
+        onTimeout: () => throw StateError(
+          'Sign-in was cancelled or timed out waiting for the browser.',
+        ),
+      );
       return await exchangeCode(
         code: code,
         codeVerifier: verifier,
         redirectUri: redirectUri,
       );
     } finally {
+      // force: true drops the still-listening request stream, which is what
+      // lets the abandoned _awaitRedirectCode future above (still running
+      // after a timeout) actually finish instead of leaking the socket.
       await server.close(force: true);
     }
   }

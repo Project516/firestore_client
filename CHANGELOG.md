@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.5.1
+
+- `GoogleDesktopOAuth.signIn` now bounds the wait for the loopback redirect
+  with a `timeout` (default 5 minutes). Closing the browser tab before
+  finishing the flow sent nothing to the loopback server, so the returned
+  future never settled and a desktop sign-in attempt hung until the app was
+  restarted (Spectrum3847/SpectrumStrategy#1694).
+
 ## 0.5.0
 
 - `centralProjectId` and `defaultCentralFunctionsBaseUrl` are build-time
