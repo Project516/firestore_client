@@ -178,7 +178,7 @@ void main() {
           jsonEncode({
             'documents': [
               _docJson('teams/254', {'nickname': 'Cheesy Poofs'}),
-              _docJson('teams/3847', {'nickname': 'Spectrum'}),
+              _docJson('teams/3847', {'nickname': 'Example Team'}),
             ],
           }),
           200,

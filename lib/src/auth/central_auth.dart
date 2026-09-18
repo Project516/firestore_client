@@ -6,7 +6,7 @@ import 'package:http/http.dart' as http;
 import '../http/timeout_http_client.dart';
 import 'firebase_auth_session.dart';
 
-/// Result of the central Spectrum App Platform's `getCustomToken` handshake.
+/// Result of a central auth platform's `getCustomToken` handshake.
 class CentralHandshake {
   const CentralHandshake({required this.customToken, this.profile});
 
@@ -113,55 +113,56 @@ String _kindName(CentralAuthErrorKind kind) {
   }
 }
 
-/// The central project every Spectrum app authenticates against.
+/// The Firebase project id of the central auth platform (see
+/// [CentralRestAuthClient]): several apps sharing one Firebase project as a
+/// shared approval/roster authority, each minting its own custom token from
+/// it.
 ///
-/// Spectrum's own project is the default, so a build that passes no defines
-/// behaves exactly as it did before this was configurable. Another team
-/// running these apps against their own platform overrides it at build time:
+/// Empty unless configured -- this package has no built-in central project.
+/// Set it at build time so self-hosting the pattern is a build flag instead
+/// of a fork of this package:
 ///
 /// ```
-/// flutter build apk --dart-define=SPECTRUM_CENTRAL_PROJECT_ID=yourteam-central
+/// flutter build apk --dart-define=CENTRAL_PROJECT_ID=your-central-project
 /// ```
-///
-/// It is a define rather than a constant so self-hosting is a build flag
-/// instead of a fork of this package.
-const String centralProjectId = String.fromEnvironment(
-  'SPECTRUM_CENTRAL_PROJECT_ID',
-  defaultValue: 'spectrumtasks-81c63',
-);
+const String centralProjectId = String.fromEnvironment('CENTRAL_PROJECT_ID');
 
 /// The callable on the central project that mints per-app custom tokens.
 const String customTokenCallable = 'getCustomToken';
 
 /// The central project's callable endpoint. Defaults to the region v1 onCall
 /// functions use, which is the endpoint the web SDK resolves for
-/// [centralProjectId].
+/// [centralProjectId]. Only meaningful once [centralProjectId] is configured;
+/// see [CentralRestAuthClient], which requires an explicit
+/// `centralFunctionsBaseUrl` otherwise.
 ///
-/// Override it with `--dart-define=SPECTRUM_CENTRAL_FUNCTIONS_BASE_URL=...`
-/// for a function deployed outside `us-central1` or behind a custom domain.
+/// Override it with `--dart-define=CENTRAL_FUNCTIONS_BASE_URL=...` for a
+/// function deployed outside `us-central1` or behind a custom domain.
 /// [CentralRestAuthClient] still requires https of whatever it is given, since
 /// that URL carries a bearer token.
 const String defaultCentralFunctionsBaseUrl = String.fromEnvironment(
-  'SPECTRUM_CENTRAL_FUNCTIONS_BASE_URL',
+  'CENTRAL_FUNCTIONS_BASE_URL',
   defaultValue: 'https://us-central1-$centralProjectId.cloudfunctions.net',
 );
 
-/// The REST implementation of the central Spectrum App Platform handshake --
-/// Google ID token -> central session -> `getCustomToken` -- for any
-/// platform that cannot use `cloud_functions` (desktop, and mobile wherever
-/// a second native FlutterFire app is not registered on the central
-/// project). A web/mobile app with its own FlutterFire central app can call
-/// the callable directly instead and does not need this class.
+/// The REST implementation of a central-auth-platform handshake -- Google ID
+/// token -> central session -> `getCustomToken` -- for any platform that
+/// cannot use `cloud_functions` (desktop, and mobile wherever a second
+/// native FlutterFire app is not registered on the central project). A
+/// web/mobile app with its own FlutterFire central app can call the callable
+/// directly instead and does not need this class.
 ///
 /// One [FirebaseAuthSession] per instance, scoped to the central project, so
 /// its refresh token never mixes with the calling app's own session.
 class CentralRestAuthClient {
   CentralRestAuthClient({
     required String centralApiKey,
-    this.centralFunctionsBaseUrl = defaultCentralFunctionsBaseUrl,
+    String? centralFunctionsBaseUrl,
     http.Client? httpClient,
     Duration? customTokenTimeout,
-  })  : _customTokenTimeout = customTokenTimeout ?? _defaultCustomTokenTimeout,
+  })  : centralFunctionsBaseUrl =
+            centralFunctionsBaseUrl ?? _requireConfiguredBaseUrl(),
+        _customTokenTimeout = customTokenTimeout ?? _defaultCustomTokenTimeout,
         _http = httpClient ??
             // The transport deadline has to cover the callable's own, or a
             // cold start dies in the socket before getCustomToken's timeout
@@ -171,7 +172,7 @@ class CentralRestAuthClient {
               timeout: customTokenTimeout ?? _defaultCustomTokenTimeout,
             ),
         _ownsHttp = httpClient == null {
-    final baseUri = _assertCredentialedOrigin(centralFunctionsBaseUrl);
+    final baseUri = _assertCredentialedOrigin(this.centralFunctionsBaseUrl);
     _customTokenUri = Uri(
       scheme: baseUri.scheme,
       userInfo: baseUri.userInfo,
@@ -215,6 +216,21 @@ class CentralRestAuthClient {
     return uri;
   }
 
+  /// Resolves the endpoint when a caller passes no explicit
+  /// `centralFunctionsBaseUrl`. There is no built-in central project, so this
+  /// fails fast with a clear message instead of quietly deriving a
+  /// nonexistent host from an unset [centralProjectId].
+  static String _requireConfiguredBaseUrl() {
+    if (centralProjectId.isEmpty) {
+      throw ArgumentError(
+        'No central project configured. Pass centralFunctionsBaseUrl '
+        'explicitly, or build with '
+        '--dart-define=CENTRAL_PROJECT_ID=<your-central-project-id>.',
+      );
+    }
+    return defaultCentralFunctionsBaseUrl;
+  }
+
   /// The central project's callable endpoint.
   final String centralFunctionsBaseUrl;
 
@@ -253,7 +269,8 @@ class CentralRestAuthClient {
   Future<void> signOut() => _session.signOut();
 
   /// Step 3: calls the central `getCustomToken` callable with the central ID
-  /// token as the bearer. [targetApp] is the calling app's SpectrumAdmin key.
+  /// token as the bearer. [targetApp] is the calling app's key as registered
+  /// on the central platform.
   Future<CentralHandshake> handshake(String targetApp) async {
     final bearerToken = await getIdToken();
     if (bearerToken == null) {

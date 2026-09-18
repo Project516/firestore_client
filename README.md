@@ -44,9 +44,9 @@ small, dependency-light client:
 - **`FirestoreValueCodec`** -- lossless conversion between plain Dart values
   and Firestore's REST `Value` JSON (null, bool, int, double, String,
   DateTime, bytes, GeoPoint, document references, lists, maps).
-- **`CentralRestAuthClient`** -- the REST handshake for the central Spectrum
-  App Platform pattern: exchange a Google ID token for a session on a
-  central Firebase project, then call its `getCustomToken` callable to mint
+- **`CentralRestAuthClient`** -- the REST handshake for a central-auth-platform
+  pattern: exchange a Google ID token for a session on a shared central
+  Firebase project, then call its `getCustomToken` callable to mint
   a custom token scoped to the calling app. For any platform that cannot use
   `cloud_functions` (desktop, or a mobile app with no native FlutterFire app
   registered on the central project). `classifyCentralAuthError` maps the
@@ -112,7 +112,17 @@ In a Flutter app, pass `launchUrl` from `url_launcher` as the `launcher` and
 store `session.toJson()` (for example with `shared_preferences`) to restore
 the session on the next launch with `session.restore(...)`.
 
-### Central Spectrum App Platform handshake
+### Central auth-platform handshake
+
+Several apps can share one Firebase project as a central approval/roster
+authority: each app signs in there and exchanges that session for a custom
+token scoped to itself. There is no built-in central project, so set
+`CENTRAL_PROJECT_ID` at build time (or pass `centralFunctionsBaseUrl`
+directly):
+
+```
+flutter build apk --dart-define=CENTRAL_PROJECT_ID=your-central-project
+```
 
 ```dart
 final client = CentralRestAuthClient(centralApiKey: '<central-web-api-key>');
