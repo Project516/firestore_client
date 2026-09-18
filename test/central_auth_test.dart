@@ -8,6 +8,12 @@ import 'package:test/test.dart';
 
 import 'package:firestore_client/firestore_client.dart';
 
+/// A stand-in central project id, since this package has no built-in
+/// default and most of these tests inject their own [httpClient] and never
+/// actually resolve this host.
+const _testCentralBaseUrl =
+    'https://us-central1-example-central.cloudfunctions.net';
+
 /// A minimal in-memory [CentralSessionStorage], standing in for whatever
 /// prefs/file adapter a real caller supplies.
 class _MemoryStorage implements CentralSessionStorage {
@@ -102,11 +108,12 @@ void main() {
         () async {
       final client = CentralRestAuthClient(
         centralApiKey: 'key',
+        centralFunctionsBaseUrl: _testCentralBaseUrl,
         httpClient: _centralBackend(),
       );
       await client.signInWithGoogleIdToken('google-id-token');
 
-      final handshake = await client.handshake('spectrumstrategy');
+      final handshake = await client.handshake('example-app');
 
       expect(handshake.customToken, 'custom-token-1');
       expect(handshake.profile?.displayName, 'Dana Scout');
@@ -116,11 +123,12 @@ void main() {
     test('handshake with no central session throws unknown', () async {
       final client = CentralRestAuthClient(
         centralApiKey: 'key',
+        centralFunctionsBaseUrl: _testCentralBaseUrl,
         httpClient: _centralBackend(),
       );
 
       await expectLater(
-        client.handshake('spectrumstrategy'),
+        client.handshake('example-app'),
         throwsA(
           isA<CentralAuthException>().having(
             (e) => e.kind,
@@ -134,6 +142,7 @@ void main() {
     test('a PERMISSION_DENIED callable response is not-approved', () async {
       final client = CentralRestAuthClient(
         centralApiKey: 'key',
+        centralFunctionsBaseUrl: _testCentralBaseUrl,
         httpClient: _centralBackend(
           callableStatus: 403,
           callableBody: {
@@ -147,7 +156,7 @@ void main() {
       await client.signInWithGoogleIdToken('google-id-token');
 
       await expectLater(
-        client.handshake('spectrumstrategy'),
+        client.handshake('example-app'),
         throwsA(
           isA<CentralAuthException>().having(
             (e) => e.kind,
@@ -161,6 +170,7 @@ void main() {
     test('a NOT_FOUND callable response is app-not-registered', () async {
       final client = CentralRestAuthClient(
         centralApiKey: 'key',
+        centralFunctionsBaseUrl: _testCentralBaseUrl,
         httpClient: _centralBackend(
           callableStatus: 404,
           callableBody: {
@@ -174,7 +184,7 @@ void main() {
       await client.signInWithGoogleIdToken('google-id-token');
 
       await expectLater(
-        client.handshake('spectrumstrategy'),
+        client.handshake('example-app'),
         throwsA(
           isA<CentralAuthException>().having(
             (e) => e.kind,
@@ -189,6 +199,7 @@ void main() {
         () async {
       final client = CentralRestAuthClient(
         centralApiKey: 'key',
+        centralFunctionsBaseUrl: _testCentralBaseUrl,
         httpClient: MockClient((request) async {
           if (request.url.path.endsWith('/getCustomToken')) {
             throw const SocketException('Failed host lookup');
@@ -213,7 +224,7 @@ void main() {
       expect(restored, isNotNull);
 
       await expectLater(
-        client.handshake('spectrumstrategy'),
+        client.handshake('example-app'),
         throwsA(isNot(isA<CentralAuthException>())),
       );
     });
@@ -222,7 +233,10 @@ void main() {
       // Boundedness of the default client is covered by
       // timeout_http_client_test.dart; this only confirms the constructor
       // does not require one.
-      final client = CentralRestAuthClient(centralApiKey: 'key');
+      final client = CentralRestAuthClient(
+        centralApiKey: 'key',
+        centralFunctionsBaseUrl: _testCentralBaseUrl,
+      );
       addTearDown(client.close);
     });
 
@@ -231,12 +245,13 @@ void main() {
         'TypeError', () async {
       final client = CentralRestAuthClient(
         centralApiKey: 'key',
+        centralFunctionsBaseUrl: _testCentralBaseUrl,
         httpClient: MockClient((request) async => http.Response('{}', 200)),
       );
       addTearDown(client.close);
 
       await expectLater(
-        client.getCustomToken('bearer', 'spectrumstrategy'),
+        client.getCustomToken('bearer', 'example-app'),
         throwsA(isA<CentralAuthException>()),
       );
     });
@@ -246,13 +261,14 @@ void main() {
         'FirebaseAuthException', () async {
       final client = CentralRestAuthClient(
         centralApiKey: 'key',
+        centralFunctionsBaseUrl: _testCentralBaseUrl,
         httpClient:
             MockClient((request) async => http.Response('not json{', 200)),
       );
       addTearDown(client.close);
 
       await expectLater(
-        client.getCustomToken('bearer', 'spectrumstrategy'),
+        client.getCustomToken('bearer', 'example-app'),
         throwsA(isA<CentralAuthException>()),
       );
     });
@@ -262,6 +278,7 @@ void main() {
       http.BaseRequest? seen;
       final client = CentralRestAuthClient(
         centralApiKey: 'key',
+        centralFunctionsBaseUrl: _testCentralBaseUrl,
         httpClient: MockClient((request) async {
           seen = request;
           return http.Response(
@@ -274,7 +291,7 @@ void main() {
       );
       addTearDown(client.close);
 
-      await client.getCustomToken('bearer', 'spectrumstrategy');
+      await client.getCustomToken('bearer', 'example-app');
 
       expect(seen!.followRedirects, isFalse);
     });
@@ -283,6 +300,7 @@ void main() {
       final shared = MockClient((request) async => http.Response('{}', 200));
       final client = CentralRestAuthClient(
         centralApiKey: 'key',
+        centralFunctionsBaseUrl: _testCentralBaseUrl,
         httpClient: shared,
       );
 
@@ -312,12 +330,13 @@ void main() {
     test('no stored session', () async {
       client = CentralRestAuthClient(
         centralApiKey: 'key',
+        centralFunctionsBaseUrl: _testCentralBaseUrl,
         httpClient: _centralBackend(),
       );
       final outcome = await runCentralApprovalRecheck(
         client: client,
         storage: storage,
-        appKey: 'spectrumstrategy',
+        appKey: 'example-app',
         denialsBeforeSignOut: 2,
         onApproved: onApproved,
         onDenied: onDenied,
@@ -328,6 +347,7 @@ void main() {
     test('approved re-check rotates and stores the session', () async {
       final signedIn = CentralRestAuthClient(
         centralApiKey: 'key',
+        centralFunctionsBaseUrl: _testCentralBaseUrl,
         httpClient: _centralBackend(),
       );
       await signedIn.signInWithGoogleIdToken('google-id-token');
@@ -335,12 +355,13 @@ void main() {
 
       client = CentralRestAuthClient(
         centralApiKey: 'key',
+        centralFunctionsBaseUrl: _testCentralBaseUrl,
         httpClient: _centralBackend(),
       );
       final outcome = await runCentralApprovalRecheck(
         client: client,
         storage: storage,
-        appKey: 'spectrumstrategy',
+        appKey: 'example-app',
         denialsBeforeSignOut: 2,
         onApproved: onApproved,
         onDenied: onDenied,
@@ -355,6 +376,7 @@ void main() {
       storage.value = jsonEncode({'uid': 'u', 'refreshToken': 'dead'});
       client = CentralRestAuthClient(
         centralApiKey: 'key',
+        centralFunctionsBaseUrl: _testCentralBaseUrl,
         httpClient: MockClient(
           (_) async => http.Response('{"error":"revoked"}', 400),
         ),
@@ -363,7 +385,7 @@ void main() {
       final outcome = await runCentralApprovalRecheck(
         client: client,
         storage: storage,
-        appKey: 'spectrumstrategy',
+        appKey: 'example-app',
         denialsBeforeSignOut: 2,
         onApproved: onApproved,
         onDenied: onDenied,
@@ -376,6 +398,7 @@ void main() {
     test('a single denial is pending until the threshold', () async {
       final signedIn = CentralRestAuthClient(
         centralApiKey: 'key',
+        centralFunctionsBaseUrl: _testCentralBaseUrl,
         httpClient: _centralBackend(),
       );
       await signedIn.signInWithGoogleIdToken('google-id-token');
@@ -383,6 +406,7 @@ void main() {
 
       client = CentralRestAuthClient(
         centralApiKey: 'key',
+        centralFunctionsBaseUrl: _testCentralBaseUrl,
         httpClient: _centralBackend(
           callableStatus: 403,
           callableBody: {
@@ -394,7 +418,7 @@ void main() {
       final outcome = await runCentralApprovalRecheck(
         client: client,
         storage: storage,
-        appKey: 'spectrumstrategy',
+        appKey: 'example-app',
         denialsBeforeSignOut: 2,
         onApproved: onApproved,
         onDenied: onDenied,
@@ -407,6 +431,7 @@ void main() {
     test('denials reaching the threshold end the session', () async {
       final signedIn = CentralRestAuthClient(
         centralApiKey: 'key',
+        centralFunctionsBaseUrl: _testCentralBaseUrl,
         httpClient: _centralBackend(),
       );
       await signedIn.signInWithGoogleIdToken('google-id-token');
@@ -414,6 +439,7 @@ void main() {
 
       client = CentralRestAuthClient(
         centralApiKey: 'key',
+        centralFunctionsBaseUrl: _testCentralBaseUrl,
         httpClient: _centralBackend(
           callableStatus: 403,
           callableBody: {
@@ -426,7 +452,7 @@ void main() {
       final outcome = await runCentralApprovalRecheck(
         client: client,
         storage: storage,
-        appKey: 'spectrumstrategy',
+        appKey: 'example-app',
         denialsBeforeSignOut: 2,
         onApproved: onApproved,
         onDenied: onDenied,
@@ -440,6 +466,7 @@ void main() {
       storage.value = jsonEncode({'uid': 'u', 'refreshToken': 'r'});
       client = CentralRestAuthClient(
         centralApiKey: 'key',
+        centralFunctionsBaseUrl: _testCentralBaseUrl,
         httpClient: MockClient((_) async {
           throw const SocketException('Failed host lookup');
         }),
@@ -448,7 +475,7 @@ void main() {
       final outcome = await runCentralApprovalRecheck(
         client: client,
         storage: storage,
-        appKey: 'spectrumstrategy',
+        appKey: 'example-app',
         denialsBeforeSignOut: 2,
         onApproved: onApproved,
         onDenied: onDenied,
@@ -462,13 +489,14 @@ void main() {
       storage.value = 'not json{';
       client = CentralRestAuthClient(
         centralApiKey: 'key',
+        centralFunctionsBaseUrl: _testCentralBaseUrl,
         httpClient: _centralBackend(),
       );
 
       final outcome = await runCentralApprovalRecheck(
         client: client,
         storage: storage,
-        appKey: 'spectrumstrategy',
+        appKey: 'example-app',
         denialsBeforeSignOut: 2,
         onApproved: onApproved,
         onDenied: onDenied,
@@ -485,13 +513,14 @@ void main() {
       storage.value = jsonEncode({'uid': 12345, 'refreshToken': 'r'});
       client = CentralRestAuthClient(
         centralApiKey: 'key',
+        centralFunctionsBaseUrl: _testCentralBaseUrl,
         httpClient: _centralBackend(),
       );
 
       final outcome = await runCentralApprovalRecheck(
         client: client,
         storage: storage,
-        appKey: 'spectrumstrategy',
+        appKey: 'example-app',
         denialsBeforeSignOut: 2,
         onApproved: onApproved,
         onDenied: onDenied,
@@ -569,39 +598,42 @@ void main() {
       );
       addTearDown(client.close);
 
-      await client.getCustomToken('bearer', 'spectrumstrategy');
+      await client.getCustomToken('bearer', 'example-app');
 
       expect(calledUri, Uri.parse('https://example.com/getCustomToken'));
     });
 
-    test('allows the real https endpoint', () {
+    test('allows an explicit https endpoint', () {
       expect(
-        () => CentralRestAuthClient(centralApiKey: 'key'),
+        () => CentralRestAuthClient(
+          centralApiKey: 'key',
+          centralFunctionsBaseUrl: _testCentralBaseUrl,
+        ),
         returnsNormally,
       );
     });
   });
 
   group('central platform configuration', () {
-    // These are build-time defines so another team can self-host without
-    // forking this package. A build that passes no defines has to keep
-    // resolving to Spectrum's platform, or every app pinning this breaks.
-    test('defaults to Spectrum\'s central project', () {
-      expect(centralProjectId, 'spectrumtasks-81c63');
+    // Build-time defines, so any team can point this package at their own
+    // central project without forking it. There is no built-in default.
+    test('has no built-in central project', () {
+      expect(centralProjectId, isEmpty);
     });
 
-    test('derives the callable endpoint from the project id', () {
+    test('throws when unconfigured and no explicit base URL is given', () {
       expect(
-        defaultCentralFunctionsBaseUrl,
-        'https://us-central1-$centralProjectId.cloudfunctions.net',
+        () => CentralRestAuthClient(centralApiKey: 'key'),
+        throwsArgumentError,
       );
     });
 
-    test('the default endpoint satisfies the https origin check', () {
+    test('an explicit base URL works without CENTRAL_PROJECT_ID', () {
       expect(
         () => CentralRestAuthClient(
           centralApiKey: 'key',
-          centralFunctionsBaseUrl: defaultCentralFunctionsBaseUrl,
+          centralFunctionsBaseUrl:
+              'https://us-central1-example-central.cloudfunctions.net',
         ),
         returnsNormally,
       );

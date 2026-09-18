@@ -1,5 +1,20 @@
 # Changelog
 
+## 0.6.0
+
+- **Breaking:** the central-auth-platform defines are renamed
+  `CENTRAL_PROJECT_ID` and `CENTRAL_FUNCTIONS_BASE_URL` (from
+  `SPECTRUM_CENTRAL_PROJECT_ID` / `SPECTRUM_CENTRAL_FUNCTIONS_BASE_URL`), and
+  `centralProjectId` no longer defaults to Spectrum's own Firebase project.
+  This package has no built-in central project now: `CentralRestAuthClient`
+  throws `ArgumentError` at construction if `CENTRAL_PROJECT_ID` is unset and
+  no `centralFunctionsBaseUrl` was passed explicitly, instead of silently
+  resolving to `spectrumtasks-81c63`. An app depending on the old default
+  passes `--dart-define=CENTRAL_PROJECT_ID=<its central project>` (or
+  `centralFunctionsBaseUrl` directly) going forward.
+- Doc comments and the README no longer name Spectrum specifically; the
+  central-auth-platform handshake is a general pattern, not tied to one team.
+
 ## 0.5.1
 
 - `GoogleDesktopOAuth.signIn` now bounds the wait for the loopback redirect
