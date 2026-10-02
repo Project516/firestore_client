@@ -1,4 +1,4 @@
-> **Moved.** This package now lives in [Project516/dart-packages](https://github.com/Project516/dart-packages/tree/main/packages/firestore_client), tagged `firestore_client-vX.Y.Z`. This repo is archived and gets no further updates.
+> **Moved.** This package now lives in [Project516/dart-packages](https://github.com/Project516/dart-packages/tree/main/packages/firestore_client), tagged per release, currently `firestore_client-v0.6.0`. This repo is archived and gets no further updates.
 
 # firestore_client
 
