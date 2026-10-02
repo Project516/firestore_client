@@ -1,3 +1,5 @@
+> **Moved.** This package now lives in [Project516/dart-packages](https://github.com/Project516/dart-packages/tree/main/packages/firestore_client), tagged `firestore_client-vX.Y.Z`. This repo is archived and gets no further updates.
+
 # firestore_client
 
 A pure-Dart Firebase Auth and Cloud Firestore client over the public REST
